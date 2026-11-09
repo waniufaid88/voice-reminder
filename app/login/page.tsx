@@ -50,12 +50,12 @@ export default function LoginPage() {
 
     if (!result.success) {
       toast.error(result.error || "Failed to log in.");
-      setIsLoading(false);
     } else {
       toast.success("Welcome back, " + (result.user?.name || "User") + "!");
       router.push("/");
       router.refresh();
     }
+    setIsLoading(false);
   }
 
   return (
