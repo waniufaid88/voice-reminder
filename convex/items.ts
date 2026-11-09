@@ -1,0 +1,231 @@
+import { mutation, query } from "./_generated/server";
+import { v } from "convex/values";
+
+export const generateUploadUrl = mutation({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+export const getAudioUrl = query({
+  args: { storageId: v.id("_storage") },
+  handler: async (ctx, args) => {
+    return await ctx.storage.getUrl(args.storageId);
+  },
+});
+
+export const listByUser = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const items = await ctx.db
+      .query("items")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .collect();
+
+    // Sort pinned items first, then by createdAt desc
+    return items.sort((a, b) => {
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return b.createdAt - a.createdAt;
+    });
+  },
+});
+
+export const listActiveReminders = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const reminders = await ctx.db
+      .query("items")
+      .withIndex("by_userId_type", (q) =>
+        q.eq("userId", args.userId).eq("type", "reminder")
+      )
+      .collect();
+
+    return reminders.filter(
+      (r) => r.reminderStatus === "pending" && r.dueDate !== undefined
+    );
+  },
+});
+
+export const create = mutation({
+  args: {
+    userId: v.id("users"),
+    type: v.union(v.literal("note"), v.literal("reminder"), v.literal("list")),
+    title: v.string(),
+    content: v.string(),
+    isPinned: v.optional(v.boolean()),
+    tags: v.array(v.string()),
+    audioStorageId: v.optional(v.id("_storage")),
+    audioDuration: v.optional(v.number()),
+    dueDate: v.optional(v.number()),
+    reminderStatus: v.optional(
+      v.union(v.literal("pending"), v.literal("completed"))
+    ),
+    checklist: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          text: v.string(),
+          completed: v.boolean(),
+        })
+      )
+    ),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    return await ctx.db.insert("items", {
+      userId: args.userId,
+      type: args.type,
+      title: args.title.trim() || "Untitled",
+      content: args.content,
+      isPinned: args.isPinned ?? false,
+      tags: args.tags,
+      audioStorageId: args.audioStorageId,
+      audioDuration: args.audioDuration,
+      dueDate: args.dueDate,
+      reminderStatus:
+        args.type === "reminder" ? args.reminderStatus ?? "pending" : undefined,
+      isNotified: false,
+      checklist: args.checklist,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const update = mutation({
+  args: {
+    itemId: v.id("items"),
+    title: v.optional(v.string()),
+    content: v.optional(v.string()),
+    type: v.optional(
+      v.union(v.literal("note"), v.literal("reminder"), v.literal("list"))
+    ),
+    tags: v.optional(v.array(v.string())),
+    dueDate: v.optional(v.number()),
+    reminderStatus: v.optional(
+      v.union(v.literal("pending"), v.literal("completed"))
+    ),
+    checklist: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          text: v.string(),
+          completed: v.boolean(),
+        })
+      )
+    ),
+  },
+  handler: async (ctx, args) => {
+    const { itemId, ...fields } = args;
+    const existing = await ctx.db.get(itemId);
+    if (!existing) throw new Error("Item not found");
+
+    const updates: Record<string, any> = { updatedAt: Date.now() };
+    if (fields.title !== undefined) updates.title = fields.title.trim() || "Untitled";
+    if (fields.content !== undefined) updates.content = fields.content;
+    if (fields.type !== undefined) updates.type = fields.type;
+    if (fields.tags !== undefined) updates.tags = fields.tags;
+    if (fields.dueDate !== undefined) updates.dueDate = fields.dueDate;
+    if (fields.reminderStatus !== undefined) updates.reminderStatus = fields.reminderStatus;
+    if (fields.checklist !== undefined) updates.checklist = fields.checklist;
+
+    await ctx.db.patch(itemId, updates);
+  },
+});
+
+export const togglePin = mutation({
+  args: { itemId: v.id("items") },
+  handler: async (ctx, args) => {
+    const item = await ctx.db.get(args.itemId);
+    if (!item) throw new Error("Item not found");
+    await ctx.db.patch(args.itemId, {
+      isPinned: !item.isPinned,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const toggleChecklistItem = mutation({
+  args: {
+    itemId: v.id("items"),
+    checklistItemId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const item = await ctx.db.get(args.itemId);
+    if (!item || !item.checklist) throw new Error("List item not found");
+
+    const updatedChecklist = item.checklist.map((ci) => {
+      if (ci.id === args.checklistItemId) {
+        return { ...ci, completed: !ci.completed };
+      }
+      return ci;
+    });
+
+    await ctx.db.patch(args.itemId, {
+      checklist: updatedChecklist,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const toggleReminderStatus = mutation({
+  args: { itemId: v.id("items") },
+  handler: async (ctx, args) => {
+    const item = await ctx.db.get(args.itemId);
+    if (!item) throw new Error("Item not found");
+
+    const newStatus = item.reminderStatus === "completed" ? "pending" : "completed";
+    await ctx.db.patch(args.itemId, {
+      reminderStatus: newStatus,
+      isNotified: newStatus === "completed",
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const snoozeReminder = mutation({
+  args: {
+    itemId: v.id("items"),
+    minutes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const item = await ctx.db.get(args.itemId);
+    if (!item) throw new Error("Item not found");
+
+    const baseTime = Math.max(item.dueDate ?? Date.now(), Date.now());
+    const newDueDate = baseTime + args.minutes * 60 * 1000;
+
+    await ctx.db.patch(args.itemId, {
+      dueDate: newDueDate,
+      reminderStatus: "pending",
+      isNotified: false,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const markNotified = mutation({
+  args: { itemId: v.id("items") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.itemId, { isNotified: true });
+  },
+});
+
+export const deleteItem = mutation({
+  args: { itemId: v.id("items") },
+  handler: async (ctx, args) => {
+    const item = await ctx.db.get(args.itemId);
+    if (item && item.audioStorageId) {
+      try {
+        await ctx.storage.delete(item.audioStorageId);
+      } catch {
+        // Storage file deletion fallback
+      }
+    }
+    await ctx.db.delete(args.itemId);
+  },
+});
+
