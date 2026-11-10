@@ -11,6 +11,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { formatReadableDueDate } from "@/lib/date-utils";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 export interface ItemRecord {
   _id: Id<"items">;
@@ -79,11 +90,15 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
     toast.success(item.isPinned ? "Unpinned item" : "Pinned to top 📌");
   };
 
-  const handleDelete = async () => {
-    if (confirm("Are you sure you want to delete this item?")) {
-      setIsDeleting(true);
+  const handleConfirmDelete = async () => {
+    setIsDeleting(true);
+    try {
       await deleteItem({ itemId: item._id });
       toast.success("Item deleted");
+    } catch {
+      toast.error("Failed to delete item");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -173,18 +188,38 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
               </svg>
             </button>
 
-            {/* Delete */}
-            <button
-              type="button"
-              disabled={isDeleting}
-              onClick={handleDelete}
-              className="rounded-lg p-1 text-zinc-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
-              title="Delete item"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
+            {/* Delete with Alert Dialog */}
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  className="rounded-lg p-1 text-zinc-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
+                  title="Delete item"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Are you sure you want to delete this item?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This action cannot be undone. This will permanently delete &ldquo;{item.title}&rdquo; from your account.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleConfirmDelete}
+                    className="bg-rose-600 hover:bg-rose-700 text-white"
+                  >
+                    {isDeleting ? "Deleting..." : "Yes, Delete"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
 

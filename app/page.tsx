@@ -14,6 +14,7 @@ import { EditItemDialog } from "@/components/EditItemDialog";
 import { NotificationWatcher } from "@/components/NotificationWatcher";
 import { StructuredItemData } from "@/components/ItemPreviewDialog";
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -195,13 +196,41 @@ export default function DashboardPage() {
                 </span>
               </div>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleLogout}
-            >
-              Sign out
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger
+                render={
+                  <Button variant="outline" size="sm">
+                    Sign out
+                  </Button>
+                }
+              />
+
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    Are you sure you want to sign out of this account?
+                  </AlertDialogTitle>
+
+                  <AlertDialogDescription>
+                    You will be signed out of your session and redirected to the login
+                    page.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+
+                <AlertDialogFooter>
+                  <AlertDialogCancel>
+                    Cancel
+                  </AlertDialogCancel>
+
+                  <AlertDialogAction
+                    onClick={handleLogout}
+                    className="bg-rose-600 hover:bg-rose-700 text-white"
+                  >
+                    Yes, Sign out
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
       </header>

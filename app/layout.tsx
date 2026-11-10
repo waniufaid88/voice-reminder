@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { ConvexClientProvider } from "./ConvexClientProvider";
 import { Toaster } from "react-hot-toast";
+import { Geist } from "next/font/google";
+import { cn } from "@/lib/utils";
+
+const geist = Geist({ subsets: ['latin'], variable: '--font-sans' });
 
 export const metadata: Metadata = {
   title: "VoiceReminder",
@@ -12,19 +16,20 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className="h-full antialiased"
+      className={cn("h-full antialiased", "font-sans", geist.variable)}
     >
       <body className="min-h-full flex flex-col font-sans">
         <ConvexClientProvider>
           {children}
           <Toaster
-            position="top-right"
+            position="top-center"
             toastOptions={{
-              duration: 4000,
+              duration: 3000,
               style: {
                 borderRadius: "14px",
-                background: "#18181b",
-                color: "#fafafa",
+                // background: "#18181b",
+                background: "white",
+                color: "#18181b",
                 fontSize: "13px",
                 border: "1px solid rgba(255, 255, 255, 0.1)",
                 boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.2)",
