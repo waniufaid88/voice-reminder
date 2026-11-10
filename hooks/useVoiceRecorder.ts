@@ -2,17 +2,43 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 
+interface SpeechRecognitionResultItem {
+  transcript: string;
+}
+interface SpeechRecognitionResultList {
+  length: number;
+  [index: number]: {
+    [index: number]: SpeechRecognitionResultItem;
+  };
+}
+interface BrowserSpeechEvent extends Event {
+  results: SpeechRecognitionResultList;
+}
+interface BrowserSpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((event: BrowserSpeechEvent) => void) | null;
+  onerror: (() => void) | null;
+}
+
 export interface RecordingResult {
   blob: Blob;
   duration: number;
   url: string;
+  browserTranscript: string;
 }
 
 export function useVoiceRecorder() {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [duration, setDuration] = useState(0);
+  const [liveTranscript, setLiveTranscript] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -20,6 +46,8 @@ export function useVoiceRecorder() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const speechTranscriptRef = useRef<string>("");
 
   // Clean up on unmount
   useEffect(() => {
@@ -31,6 +59,12 @@ export function useVoiceRecorder() {
       if (audioContextRef.current && audioContextRef.current.state !== "closed") {
         audioContextRef.current.close().catch(() => {});
       }
+      analyserRef.current = null;
+      if (speechRecognitionRef.current) {
+        try {
+          speechRecognitionRef.current.stop();
+        } catch {}
+      }
     };
   }, []);
 
@@ -38,6 +72,8 @@ export function useVoiceRecorder() {
     setError(null);
     audioChunksRef.current = [];
     setDuration(0);
+    setLiveTranscript("");
+    speechTranscriptRef.current = "";
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -51,14 +87,55 @@ export function useVoiceRecorder() {
 
       // Setup Web Audio API Analyser for live waveform visualization
       const AudioContextClass =
-        window.AudioContext || (window as any).webkitAudioContext;
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error("Web Audio API is not supported in this browser.");
+      }
       const audioCtx = new AudioContextClass();
       audioContextRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 64;
-      source.connect(analyser);
-      analyserRef.current = analyser;
+      const analyserNode = audioCtx.createAnalyser();
+      analyserNode.fftSize = 64;
+      source.connect(analyserNode);
+      analyserRef.current = analyserNode;
+      setAnalyser(analyserNode);
+
+      // Setup in-browser Web Speech API transcription (Chrome, Edge, Safari)
+      const win = window as unknown as {
+        SpeechRecognition?: new () => BrowserSpeechRecognition;
+        webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
+      };
+      const SpeechRecognitionClass =
+        win.SpeechRecognition || win.webkitSpeechRecognition;
+
+      if (SpeechRecognitionClass) {
+        try {
+          const recognition = new SpeechRecognitionClass();
+          recognition.continuous = true;
+          recognition.interimResults = true;
+          recognition.lang = "en-US";
+
+          recognition.onresult = (event: BrowserSpeechEvent) => {
+            let fullText = "";
+            for (let i = 0; i < event.results.length; i++) {
+              fullText += event.results[i][0].transcript + " ";
+            }
+            const clean = fullText.trim();
+            speechTranscriptRef.current = clean;
+            setLiveTranscript(clean);
+          };
+
+          recognition.onerror = () => {
+            // Non-fatal, continue with audio recording
+          };
+
+          recognition.start();
+          speechRecognitionRef.current = recognition;
+        } catch {
+          // SpeechRecognition initialization fallback
+        }
+      }
 
       // Select supported audio mime type
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
@@ -87,11 +164,13 @@ export function useVoiceRecorder() {
       timerRef.current = setInterval(() => {
         setDuration((prev) => prev + 1);
       }, 1000);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const isNotAllowed = err instanceof Error && err.name === "NotAllowedError";
+      const message = err instanceof Error ? err.message : String(err);
       setError(
-        err.name === "NotAllowedError"
+        isNotAllowed
           ? "Microphone access was denied. Please allow microphone permissions."
-          : "Could not access microphone: " + err.message
+          : "Could not access microphone: " + message
       );
     }
   }, []);
@@ -121,6 +200,12 @@ export function useVoiceRecorder() {
     return new Promise((resolve) => {
       if (timerRef.current) clearInterval(timerRef.current);
 
+      if (speechRecognitionRef.current) {
+        try {
+          speechRecognitionRef.current.stop();
+        } catch {}
+      }
+
       if (
         !mediaRecorderRef.current ||
         mediaRecorderRef.current.state === "inactive"
@@ -136,6 +221,7 @@ export function useVoiceRecorder() {
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
         const url = URL.createObjectURL(blob);
         const finalDuration = duration;
+        const finalTranscript = speechTranscriptRef.current.trim();
 
         // Cleanup audio stream
         if (streamRef.current) {
@@ -148,10 +234,17 @@ export function useVoiceRecorder() {
         ) {
           audioContextRef.current.close().catch(() => {});
         }
+        analyserRef.current = null;
+        setAnalyser(null);
 
         setIsRecording(false);
         setIsPaused(false);
-        resolve({ blob, duration: finalDuration, url });
+        resolve({
+          blob,
+          duration: finalDuration,
+          url,
+          browserTranscript: finalTranscript,
+        });
       };
 
       mediaRecorderRef.current.stop();
@@ -160,6 +253,11 @@ export function useVoiceRecorder() {
 
   const cancelRecording = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch {}
+    }
     if (
       mediaRecorderRef.current &&
       mediaRecorderRef.current.state !== "inactive"
@@ -173,10 +271,14 @@ export function useVoiceRecorder() {
     if (audioContextRef.current && audioContextRef.current.state !== "closed") {
       audioContextRef.current.close().catch(() => {});
     }
+    analyserRef.current = null;
+    setAnalyser(null);
     audioChunksRef.current = [];
     setIsRecording(false);
     setIsPaused(false);
     setDuration(0);
+    setLiveTranscript("");
+    speechTranscriptRef.current = "";
   }, []);
 
   const formattedTime = `${Math.floor(duration / 60)
@@ -188,8 +290,9 @@ export function useVoiceRecorder() {
     isPaused,
     duration,
     formattedTime,
+    liveTranscript,
     error,
-    analyser: analyserRef.current,
+    analyser,
     startRecording,
     pauseRecording,
     resumeRecording,
@@ -197,4 +300,3 @@ export function useVoiceRecorder() {
     cancelRecording,
   };
 }
-

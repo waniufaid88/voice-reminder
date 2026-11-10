@@ -123,7 +123,7 @@ export const update = mutation({
     const existing = await ctx.db.get(itemId);
     if (!existing) throw new Error("Item not found");
 
-    const updates: Record<string, any> = { updatedAt: Date.now() };
+    const updates: Record<string, unknown> = { updatedAt: Date.now() };
     if (fields.title !== undefined) updates.title = fields.title.trim() || "Untitled";
     if (fields.content !== undefined) updates.content = fields.content;
     if (fields.type !== undefined) updates.type = fields.type;

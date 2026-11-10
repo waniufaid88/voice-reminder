@@ -66,10 +66,11 @@ export async function registerAction(formData: FormData): Promise<AuthResponse> 
         email,
       },
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to register account.";
     return {
       success: false,
-      error: err.message || "Failed to register account.",
+      error: message,
     };
   }
 }
@@ -112,10 +113,11 @@ export async function loginAction(formData: FormData): Promise<AuthResponse> {
         email: user.email,
       },
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to log in.";
     return {
       success: false,
-      error: err.message || "Failed to log in.",
+      error: message,
     };
   }
 }

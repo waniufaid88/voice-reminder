@@ -27,7 +27,9 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
   const playChime = () => {
     try {
       const AudioCtx =
-        window.AudioContext || (window as any).webkitAudioContext;
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
       const ctx = new AudioCtx();
       const now = ctx.currentTime;
 

@@ -6,13 +6,26 @@ export const checklistItemSchema = z.object({
   completed: z.boolean(),
 });
 
-export const itemSchema = z.object({
-  type: z.enum(["note", "reminder", "list"]),
-  title: z.string().trim().min(1, "Title is required"),
-  content: z.string(),
-  dueDateString: z.string().optional(),
-  checklist: z.array(checklistItemSchema).optional(),
-  tags: z.array(z.string()),
-});
+export const itemSchema = z
+  .object({
+    type: z.enum(["note", "reminder", "list"]),
+    title: z.string().trim().min(1, "Title is required"),
+    content: z.string(),
+    dueDateString: z.string().optional(),
+    checklist: z.array(checklistItemSchema).optional(),
+    tags: z.array(z.string()),
+  })
+  .refine(
+    (data) => {
+      if (data.type === "reminder") {
+        return Boolean(data.dueDateString && data.dueDateString.trim().length > 0);
+      }
+      return true;
+    },
+    {
+      message: "Please select a due date and time for the reminder",
+      path: ["dueDateString"],
+    }
+  );
 
 export type ItemFormValues = z.infer<typeof itemSchema>;

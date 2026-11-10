@@ -37,7 +37,7 @@ export default function DashboardPage() {
       if (!currentUser) {
         router.push("/login");
       } else {
-        setUser(currentUser as any);
+        setUser(currentUser);
       }
       setAuthLoading(false);
     }

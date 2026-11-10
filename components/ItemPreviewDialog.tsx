@@ -5,8 +5,9 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import toast from "react-hot-toast";
 
-import { itemSchema, ItemFormValues } from "@/lib/validations/item";
 import { AudioPlayer } from "./AudioPlayer";
+import { formatLocalDatetime, parseLocalDatetime } from "@/lib/date-utils";
+import { itemSchema, ItemFormValues } from "@/lib/validations/item";
 import {
   Dialog,
   DialogHeader,
@@ -36,6 +37,7 @@ export interface StructuredItemData {
   audioDuration?: number;
   audioPreviewUrl?: string;
   rawTranscript?: string;
+  isQuotaExhausted?: boolean;
 }
 
 interface ItemPreviewDialogProps {
@@ -51,8 +53,8 @@ export function ItemPreviewDialog({
   onClose,
   onSave,
 }: ItemPreviewDialogProps) {
-  const [newTagInput, setNewTagInput] = useState("");
   const [newChecklistText, setNewChecklistText] = useState("");
+  const [newTagInput, setNewTagInput] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
   const form = useForm<ItemFormValues>({
@@ -63,26 +65,29 @@ export function ItemPreviewDialog({
       content: "",
       dueDateString: "",
       checklist: [],
-      tags: [],
+      tags: ["#voice"],
     },
   });
 
-  const { watch, setValue, reset } = form;
+  const { watch, getValues, setValue, reset, handleSubmit } = form;
   const currentType = watch("type");
   const currentTags = watch("tags") || [];
   const currentChecklist = watch("checklist") || [];
 
   useEffect(() => {
     if (itemData) {
+      const cleanContent =
+        itemData.content && !itemData.content.includes("Whisper API failed")
+          ? itemData.content
+          : itemData.rawTranscript || "";
+
       reset({
-        type: itemData.type,
+        type: itemData.type || "note",
         title: itemData.title || "Untitled",
-        content: itemData.content || "",
-        dueDateString: itemData.dueDate
-          ? new Date(itemData.dueDate).toISOString().slice(0, 16)
-          : "",
+        content: cleanContent,
+        dueDateString: formatLocalDatetime(itemData.dueDate),
         checklist: itemData.checklist || [],
-        tags: itemData.tags || [],
+        tags: itemData.tags || ["#voice"],
       });
     }
   }, [itemData, reset]);
@@ -94,7 +99,7 @@ export function ItemPreviewDialog({
     if (!tag) return;
     if (!tag.startsWith("#")) tag = "#" + tag;
     if (!currentTags.includes(tag)) {
-      setValue("tags", [...currentTags, tag]);
+      setValue("tags", [...currentTags, tag], { shouldValidate: true });
     }
     setNewTagInput("");
   };
@@ -102,34 +107,41 @@ export function ItemPreviewDialog({
   const handleRemoveTag = (tagToRemove: string) => {
     setValue(
       "tags",
-      currentTags.filter((t) => t !== tagToRemove)
+      currentTags.filter((t) => t !== tagToRemove),
+      { shouldValidate: true }
     );
   };
 
   const handleAddChecklistItem = () => {
     if (!newChecklistText.trim()) return;
-    setValue("checklist", [
-      ...currentChecklist,
-      {
-        id: Date.now().toString(),
-        text: newChecklistText.trim(),
-        completed: false,
-      },
-    ]);
+    setValue(
+      "checklist",
+      [
+        ...currentChecklist,
+        {
+          id: Date.now().toString(),
+          text: newChecklistText.trim(),
+          completed: false,
+        },
+      ],
+      { shouldValidate: true }
+    );
     setNewChecklistText("");
   };
 
   const handleRemoveChecklistItem = (id: string) => {
     setValue(
       "checklist",
-      currentChecklist.filter((item) => item.id !== id)
+      currentChecklist.filter((item) => item.id !== id),
+      { shouldValidate: true }
     );
   };
 
   const handleUpdateChecklistItem = (id: string, text: string) => {
     setValue(
       "checklist",
-      currentChecklist.map((item) => (item.id === id ? { ...item, text } : item))
+      currentChecklist.map((item) => (item.id === id ? { ...item, text } : item)),
+      { shouldValidate: true }
     );
   };
 
@@ -137,15 +149,15 @@ export function ItemPreviewDialog({
     setIsSaving(true);
     try {
       const dueDate =
-        values.type === "reminder" && values.dueDateString
-          ? new Date(values.dueDateString).getTime()
+        values.type === "reminder"
+          ? parseLocalDatetime(values.dueDateString)
           : undefined;
 
       await onSave({
         ...itemData,
         type: values.type,
-        title: values.title,
-        content: values.content || "",
+        title: values.title.trim(),
+        content: values.content.trim(),
         dueDate,
         checklist: values.type === "list" ? values.checklist : undefined,
         tags: values.tags,
@@ -179,7 +191,7 @@ export function ItemPreviewDialog({
 
       <Form {...form}>
         <form
-          onSubmit={form.handleSubmit(onSubmit)}
+          onSubmit={handleSubmit(onSubmit)}
           className="mt-4 space-y-4 max-h-[75vh] overflow-y-auto pr-1"
         >
           {/* Category Tabs */}
@@ -192,7 +204,7 @@ export function ItemPreviewDialog({
                 type="button"
                 variant={currentType === "note" ? "default" : "secondary"}
                 className={`flex-1 ${currentType === "note" ? "bg-indigo-600 text-white" : ""}`}
-                onClick={() => setValue("type", "note")}
+                onClick={() => setValue("type", "note", { shouldValidate: true })}
               >
                 📝 Note
               </Button>
@@ -200,7 +212,13 @@ export function ItemPreviewDialog({
                 type="button"
                 variant={currentType === "reminder" ? "default" : "secondary"}
                 className={`flex-1 ${currentType === "reminder" ? "bg-amber-500 text-white hover:bg-amber-600" : ""}`}
-                onClick={() => setValue("type", "reminder")}
+                onClick={() => {
+                  setValue("type", "reminder", { shouldValidate: true });
+                  if (!getValues("dueDateString")) {
+                    const defaultTime = formatLocalDatetime(Date.now() + 2 * 60 * 60 * 1000);
+                    setValue("dueDateString", defaultTime, { shouldValidate: true });
+                  }
+                }}
               >
                 ⏰ Reminder
               </Button>
@@ -208,14 +226,14 @@ export function ItemPreviewDialog({
                 type="button"
                 variant={currentType === "list" ? "default" : "secondary"}
                 className={`flex-1 ${currentType === "list" ? "bg-emerald-600 text-white hover:bg-emerald-700" : ""}`}
-                onClick={() => setValue("type", "list")}
+                onClick={() => setValue("type", "list", { shouldValidate: true })}
               >
                 ✓ Checklist
               </Button>
             </div>
           </div>
 
-          {/* Title */}
+          {/* Title Field with Zod Validation */}
           <FormField
             control={form.control}
             name="title"
@@ -234,13 +252,40 @@ export function ItemPreviewDialog({
           {itemData.audioPreviewUrl && (
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1">
-                Original Voice Audio
+                Original Voice Recording
               </label>
               <AudioPlayer src={itemData.audioPreviewUrl} />
             </div>
           )}
 
-          {/* Due date picker for Reminders */}
+          {/* Details / Content Field with Zod Validation */}
+          <FormField
+            control={form.control}
+            name="content"
+            render={({ field }) => (
+              <FormItem>
+                <div className="flex items-center justify-between">
+                  <FormLabel>Details / Content</FormLabel>
+                  <span className="text-[11px] text-zinc-400">
+                    {currentType === "list"
+                      ? "Optional note for checklist"
+                      : "Notes & details"}
+                  </span>
+                </div>
+                <FormControl>
+                  <Textarea
+                    rows={4}
+                    placeholder="Type your notes, thoughts, or transcribed details here..."
+                    className="w-full text-xs font-normal leading-relaxed"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Due date picker with Zod validation for Reminders */}
           {currentType === "reminder" && (
             <FormField
               control={form.control}
@@ -285,7 +330,7 @@ export function ItemPreviewDialog({
 
                 <div className="flex gap-2 pt-1">
                   <Input
-                    placeholder="Add an item..."
+                    placeholder="Add checklist item..."
                     value={newChecklistText}
                     onChange={(e) => setNewChecklistText(e.target.value)}
                     onKeyDown={(e) => {
@@ -307,23 +352,6 @@ export function ItemPreviewDialog({
                 </div>
               </div>
             </div>
-          )}
-
-          {/* Content / Markdown for Notes & Reminders */}
-          {currentType !== "list" && (
-            <FormField
-              control={form.control}
-              name="content"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Details / Content</FormLabel>
-                  <FormControl>
-                    <Textarea rows={3} placeholder="Notes..." {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
           )}
 
           {/* Tags */}

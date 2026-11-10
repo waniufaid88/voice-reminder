@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import toast from "react-hot-toast";
 
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
@@ -8,16 +11,32 @@ import { WaveformVisualizer } from "./WaveformVisualizer";
 import { ItemPreviewDialog, StructuredItemData } from "./ItemPreviewDialog";
 import { Button } from "@/components/ui/button";
 
+const captureSchema = z.object({
+  text: z.string().trim().min(1, "Please type a note, reminder, or task"),
+});
+
+type CaptureFormValues = z.infer<typeof captureSchema>;
+
 interface SmartCaptureBarProps {
   onSaveItem: (data: StructuredItemData) => Promise<void>;
 }
 
 export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
-  const [textInput, setTextInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState<string>("");
   const [previewData, setPreviewData] = useState<StructuredItemData | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+  } = useForm<CaptureFormValues>({
+    resolver: zodResolver(captureSchema),
+    defaultValues: {
+      text: "",
+    },
+  });
 
   const {
     isRecording,
@@ -33,9 +52,8 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
   } = useVoiceRecorder();
 
   // Handle manual text submission
-  const handleTextSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!textInput.trim() || isProcessing) return;
+  const handleTextSubmit = async (values: CaptureFormValues) => {
+    if (isProcessing) return;
 
     setIsProcessing(true);
     setProcessingStatus("Structuring note with AI...");
@@ -44,35 +62,39 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       const res = await fetch("/api/ai/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: textInput }),
+        body: JSON.stringify({ text: values.text }),
       });
 
       const data = await res.json();
       if (!res.ok) {
         setPreviewData({
           type: "note",
-          title: textInput.slice(0, 30) || "New Note",
-          content: textInput,
+          title: values.text.slice(0, 30) || "New Note",
+          content: values.text,
           tags: ["#note"],
         });
       } else {
         setPreviewData(data);
       }
       setIsPreviewOpen(true);
-      setTextInput("");
+      reset();
     } catch {
       setPreviewData({
         type: "note",
-        title: textInput.slice(0, 30) || "New Note",
-        content: textInput,
+        title: values.text.slice(0, 30) || "New Note",
+        content: values.text,
         tags: ["#note"],
       });
       setIsPreviewOpen(true);
-      setTextInput("");
+      reset();
     } finally {
       setIsProcessing(false);
       setProcessingStatus("");
     }
+  };
+
+  const handleTextError = () => {
+    toast.error("Please enter some text or click the microphone to record");
   };
 
   // Handle Stop Recording & Transcribe
@@ -90,6 +112,7 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
     try {
       const formData = new FormData();
       formData.append("audio", result.blob, "voice-note.webm");
+      formData.append("fallbackText", result.browserTranscript || "");
 
       const res = await fetch("/api/ai/process", {
         method: "POST",
@@ -98,18 +121,27 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
 
       const data = await res.json();
       if (!res.ok) {
-        toast("Saved audio locally without AI transcription.", { icon: "ℹ️" });
+        toast("Saved voice recording.", { icon: "🎙️" });
         setPreviewData({
           type: "note",
-          title: "Voice Note (" + result.duration + "s)",
-          content: data.error || "Audio recording",
+          title: result.browserTranscript
+            ? result.browserTranscript.slice(0, 30)
+            : `Voice Note (${result.duration}s)`,
+          content: result.browserTranscript || "Voice note recorded.",
           audioBlob: result.blob,
           audioDuration: result.duration,
           audioPreviewUrl: result.url,
           tags: ["#voice"],
         });
       } else {
-        toast.success("Transcribed & structured with AI! ✨");
+        if (data.isQuotaExhausted) {
+          toast(
+            "Transcribed via speech recognition (OpenAI account has 0 credits remaining).",
+            { icon: "🎙️", duration: 6000 }
+          );
+        } else {
+          toast.success("Transcribed & structured with AI! ✨");
+        }
         setPreviewData({
           ...data,
           audioBlob: result.blob,
@@ -121,8 +153,10 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
     } catch {
       setPreviewData({
         type: "note",
-        title: "Voice Recording",
-        content: "Recorded voice note.",
+        title: result.browserTranscript
+          ? result.browserTranscript.slice(0, 30)
+          : "Voice Recording",
+        content: result.browserTranscript || "Recorded voice note.",
         audioBlob: result.blob,
         audioDuration: result.duration,
         audioPreviewUrl: result.url,
@@ -238,13 +272,12 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
         ) : (
           /* Normal Capture Input Bar */
           <form
-            onSubmit={handleTextSubmit}
+            onSubmit={handleSubmit(handleTextSubmit, handleTextError)}
             className="flex items-center gap-2 rounded-2xl border border-zinc-200/90 bg-white p-2 shadow-sm transition-all focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-600/15 dark:border-zinc-800 dark:bg-zinc-900"
           >
             <input
               type="text"
-              value={textInput}
-              onChange={(e) => setTextInput(e.target.value)}
+              {...register("text")}
               disabled={isProcessing}
               placeholder="Type a note, reminder, or task... (or click the microphone)"
               className="flex-1 bg-transparent px-3 py-1.5 text-sm text-zinc-900 placeholder-zinc-400 focus:outline-none dark:text-zinc-100 dark:placeholder-zinc-500"

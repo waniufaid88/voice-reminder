@@ -8,6 +8,7 @@ import toast from "react-hot-toast";
 
 import { api } from "@/convex/_generated/api";
 import { ItemRecord } from "./ItemCard";
+import { formatLocalDatetime, parseLocalDatetime } from "@/lib/date-utils";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
 import {
   Dialog,
@@ -50,7 +51,7 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
     },
   });
 
-  const { watch, setValue, reset } = form;
+  const { watch, getValues, setValue, reset, handleSubmit } = form;
   const currentType = watch("type");
   const currentTags = watch("tags") || [];
   const currentChecklist = watch("checklist") || [];
@@ -61,9 +62,7 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
         type: item.type,
         title: item.title,
         content: item.content || "",
-        dueDateString: item.dueDate
-          ? new Date(item.dueDate).toISOString().slice(0, 16)
-          : "",
+        dueDateString: formatLocalDatetime(item.dueDate),
         checklist: item.checklist || [],
         tags: item.tags || [],
       });
@@ -77,7 +76,7 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
     if (!tag) return;
     if (!tag.startsWith("#")) tag = "#" + tag;
     if (!currentTags.includes(tag)) {
-      setValue("tags", [...currentTags, tag]);
+      setValue("tags", [...currentTags, tag], { shouldValidate: true });
     }
     setNewTagInput("");
   };
@@ -85,34 +84,41 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
   const handleRemoveTag = (tagToRemove: string) => {
     setValue(
       "tags",
-      currentTags.filter((t) => t !== tagToRemove)
+      currentTags.filter((t) => t !== tagToRemove),
+      { shouldValidate: true }
     );
   };
 
   const handleAddChecklistItem = () => {
     if (!newChecklistText.trim()) return;
-    setValue("checklist", [
-      ...currentChecklist,
-      {
-        id: Date.now().toString(),
-        text: newChecklistText.trim(),
-        completed: false,
-      },
-    ]);
+    setValue(
+      "checklist",
+      [
+        ...currentChecklist,
+        {
+          id: Date.now().toString(),
+          text: newChecklistText.trim(),
+          completed: false,
+        },
+      ],
+      { shouldValidate: true }
+    );
     setNewChecklistText("");
   };
 
   const handleRemoveChecklistItem = (id: string) => {
     setValue(
       "checklist",
-      currentChecklist.filter((ci) => ci.id !== id)
+      currentChecklist.filter((ci) => ci.id !== id),
+      { shouldValidate: true }
     );
   };
 
   const handleUpdateChecklistItem = (id: string, text: string) => {
     setValue(
       "checklist",
-      currentChecklist.map((ci) => (ci.id === id ? { ...ci, text } : ci))
+      currentChecklist.map((ci) => (ci.id === id ? { ...ci, text } : ci)),
+      { shouldValidate: true }
     );
   };
 
@@ -120,14 +126,14 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
     setIsSaving(true);
     try {
       const dueDate =
-        values.type === "reminder" && values.dueDateString
-          ? new Date(values.dueDateString).getTime()
+        values.type === "reminder"
+          ? parseLocalDatetime(values.dueDateString)
           : undefined;
 
       await updateItem({
         itemId: item._id,
-        title: values.title,
-        content: values.content || "",
+        title: values.title.trim(),
+        content: values.content.trim(),
         type: values.type,
         tags: values.tags,
         dueDate,
@@ -160,7 +166,7 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
 
       <Form {...form}>
         <form
-          onSubmit={form.handleSubmit(onSubmit)}
+          onSubmit={handleSubmit(onSubmit)}
           className="mt-4 space-y-4 max-h-[75vh] overflow-y-auto pr-1"
         >
           {/* Category Tabs */}
@@ -173,7 +179,7 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
                 type="button"
                 variant={currentType === "note" ? "default" : "secondary"}
                 className={`flex-1 ${currentType === "note" ? "bg-indigo-600 text-white" : ""}`}
-                onClick={() => setValue("type", "note")}
+                onClick={() => setValue("type", "note", { shouldValidate: true })}
               >
                 📝 Note
               </Button>
@@ -181,7 +187,13 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
                 type="button"
                 variant={currentType === "reminder" ? "default" : "secondary"}
                 className={`flex-1 ${currentType === "reminder" ? "bg-amber-500 text-white hover:bg-amber-600" : ""}`}
-                onClick={() => setValue("type", "reminder")}
+                onClick={() => {
+                  setValue("type", "reminder", { shouldValidate: true });
+                  if (!getValues("dueDateString")) {
+                    const defaultTime = formatLocalDatetime(Date.now() + 2 * 60 * 60 * 1000);
+                    setValue("dueDateString", defaultTime, { shouldValidate: true });
+                  }
+                }}
               >
                 ⏰ Reminder
               </Button>
@@ -189,14 +201,14 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
                 type="button"
                 variant={currentType === "list" ? "default" : "secondary"}
                 className={`flex-1 ${currentType === "list" ? "bg-emerald-600 text-white hover:bg-emerald-700" : ""}`}
-                onClick={() => setValue("type", "list")}
+                onClick={() => setValue("type", "list", { shouldValidate: true })}
               >
                 ✓ Checklist
               </Button>
             </div>
           </div>
 
-          {/* Title */}
+          {/* Title Field with Zod Validation */}
           <FormField
             control={form.control}
             name="title"
@@ -211,7 +223,34 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
             )}
           />
 
-          {/* Reminder Due Date */}
+          {/* Details / Content Field with Zod Validation */}
+          <FormField
+            control={form.control}
+            name="content"
+            render={({ field }) => (
+              <FormItem>
+                <div className="flex items-center justify-between">
+                  <FormLabel>Details / Content</FormLabel>
+                  <span className="text-[11px] text-zinc-400">
+                    {currentType === "list"
+                      ? "Optional note for checklist"
+                      : "Notes & details"}
+                  </span>
+                </div>
+                <FormControl>
+                  <Textarea
+                    rows={4}
+                    placeholder="Type your notes, thoughts, or details here..."
+                    className="w-full text-xs font-normal leading-relaxed"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Reminder Due Date with Zod Validation */}
           {currentType === "reminder" && (
             <FormField
               control={form.control}
@@ -255,7 +294,7 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
                 ))}
                 <div className="flex gap-2 pt-1">
                   <Input
-                    placeholder="Add an item..."
+                    placeholder="Add checklist item..."
                     value={newChecklistText}
                     onChange={(e) => setNewChecklistText(e.target.value)}
                     onKeyDown={(e) => {
@@ -277,23 +316,6 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
                 </div>
               </div>
             </div>
-          )}
-
-          {/* Content */}
-          {currentType !== "list" && (
-            <FormField
-              control={form.control}
-              name="content"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Details / Content</FormLabel>
-                  <FormControl>
-                    <Textarea rows={3} placeholder="Notes..." {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
           )}
 
           {/* Tags */}
