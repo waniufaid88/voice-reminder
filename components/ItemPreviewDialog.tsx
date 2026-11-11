@@ -6,7 +6,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import toast from "react-hot-toast";
 
 import { AudioPlayer } from "./AudioPlayer";
-import { formatLocalDatetime, parseLocalDatetime } from "@/lib/date-utils";
+import { RecurrenceSelector } from "./RecurrenceSelector";
+import { formatLocalDatetime, parseLocalDatetime, formatAudioDuration } from "@/lib/date-utils";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
 import {
   Dialog,
@@ -31,6 +32,9 @@ export interface StructuredItemData {
   title: string;
   content: string;
   dueDate?: number | null;
+  isDaily?: boolean;
+  recurrenceMode?: "once" | "daily" | "custom";
+  recurrenceDays?: number[];
   checklist?: Array<{ id: string; text: string; completed: boolean }>;
   tags?: string[];
   audioBlob?: Blob;
@@ -64,6 +68,9 @@ export function ItemPreviewDialog({
       title: "",
       content: "",
       dueDateString: "",
+      isDaily: false,
+      recurrenceMode: "once",
+      recurrenceDays: [new Date().getDay()],
       checklist: [],
       tags: ["#voice"],
     },
@@ -73,6 +80,8 @@ export function ItemPreviewDialog({
   const currentType = watch("type");
   const currentTags = watch("tags") || [];
   const currentChecklist = watch("checklist") || [];
+  const currentRecurrenceMode = (watch("recurrenceMode") as "once" | "daily" | "custom") || "once";
+  const currentRecurrenceDays = watch("recurrenceDays") || [new Date().getDay()];
 
   useEffect(() => {
     if (itemData) {
@@ -86,6 +95,9 @@ export function ItemPreviewDialog({
         title: itemData.title || "Untitled",
         content: cleanContent,
         dueDateString: formatLocalDatetime(itemData.dueDate),
+        isDaily: Boolean(itemData.isDaily),
+        recurrenceMode: itemData.recurrenceMode || (itemData.isDaily ? "daily" : "once"),
+        recurrenceDays: itemData.recurrenceDays || [new Date().getDay()],
         checklist: itemData.checklist || [],
         tags: itemData.tags || ["#voice"],
       });
@@ -159,6 +171,12 @@ export function ItemPreviewDialog({
         title: values.title.trim(),
         content: values.content.trim(),
         dueDate,
+        isDaily: values.type === "reminder" ? values.recurrenceMode === "daily" : undefined,
+        recurrenceMode: values.type === "reminder" ? (values.recurrenceMode || "once") : undefined,
+        recurrenceDays:
+          values.type === "reminder" && values.recurrenceMode === "custom"
+            ? values.recurrenceDays
+            : undefined,
         checklist: values.type === "list" ? values.checklist : undefined,
         tags: values.tags,
       });
@@ -251,10 +269,20 @@ export function ItemPreviewDialog({
           {/* Audio Player if present */}
           {itemData.audioPreviewUrl && (
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1">
-                Original Voice Recording
-              </label>
-              <AudioPlayer src={itemData.audioPreviewUrl} />
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                  Original Voice Recording
+                </label>
+                {itemData.audioDuration && itemData.audioDuration > 0 ? (
+                  <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-mono font-bold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                    ⏱ {formatAudioDuration(itemData.audioDuration)}
+                  </span>
+                ) : null}
+              </div>
+              <AudioPlayer
+                src={itemData.audioPreviewUrl}
+                initialDuration={itemData.audioDuration}
+              />
             </div>
           )}
 
@@ -287,19 +315,34 @@ export function ItemPreviewDialog({
 
           {/* Due date picker with Zod validation for Reminders */}
           {currentType === "reminder" && (
-            <FormField
-              control={form.control}
-              name="dueDateString"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Due Date & Time</FormLabel>
-                  <FormControl>
-                    <Input type="datetime-local" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <div className="space-y-3">
+              <FormField
+                control={form.control}
+                name="dueDateString"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Due Date & Time</FormLabel>
+                    <FormControl>
+                      <Input type="datetime-local" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Recurrence Frequency (Once, Daily, Custom Days) */}
+              <RecurrenceSelector
+                mode={currentRecurrenceMode}
+                selectedDays={currentRecurrenceDays}
+                onChangeMode={(mode) => {
+                  setValue("recurrenceMode", mode, { shouldValidate: true });
+                  setValue("isDaily", mode === "daily", { shouldValidate: true });
+                }}
+                onChangeDays={(days) => {
+                  setValue("recurrenceDays", days, { shouldValidate: true });
+                }}
+              />
+            </div>
           )}
 
           {/* Checklist items for Lists */}

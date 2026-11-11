@@ -14,6 +14,7 @@ import { EditItemDialog } from "@/components/EditItemDialog";
 import { NotificationWatcher } from "@/components/NotificationWatcher";
 import { StructuredItemData } from "@/components/ItemPreviewDialog";
 import { Button } from "@/components/ui/button";
+import { isDateToday } from "@/lib/date-utils";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 export default function DashboardPage() {
@@ -26,6 +27,14 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<ItemRecord | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setCurrentTime(Date.now());
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Convex mutations
   const createItem = useMutation(api.items.create);
@@ -98,14 +107,33 @@ export default function DashboardPage() {
     };
   }, [rawItems]);
 
-  // Separate pinned and unpinned items
+  // Today's Reminders (due today or overdue pending, sorted chronologically ascending)
+  const todayReminders = useMemo(() => {
+    return filteredItems
+      .filter(
+        (i) =>
+          i.type === "reminder" &&
+          i.dueDate &&
+          (isDateToday(i.dueDate) ||
+            (i.reminderStatus !== "completed" && currentTime > 0 && i.dueDate < currentTime))
+      )
+      .sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
+  }, [filteredItems, currentTime]);
+
+  const todayReminderIds = useMemo(() => {
+    return new Set(todayReminders.map((i) => i._id));
+  }, [todayReminders]);
+
+  // Pinned items (excluding today's reminders to avoid duplication)
   const pinnedItems = useMemo(
-    () => filteredItems.filter((i) => i.isPinned),
-    [filteredItems]
+    () => filteredItems.filter((i) => i.isPinned && !todayReminderIds.has(i._id)),
+    [filteredItems, todayReminderIds]
   );
+
+  // Other items (excluding today's reminders and pinned items)
   const regularItems = useMemo(
-    () => filteredItems.filter((i) => !i.isPinned),
-    [filteredItems]
+    () => filteredItems.filter((i) => !i.isPinned && !todayReminderIds.has(i._id)),
+    [filteredItems, todayReminderIds]
   );
 
   // Save new item handler (with audio upload if recorded)
@@ -136,6 +164,9 @@ export default function DashboardPage() {
       title: data.title,
       content: data.content,
       dueDate: data.dueDate ?? undefined,
+      isDaily: data.isDaily,
+      recurrenceMode: data.recurrenceMode,
+      recurrenceDays: data.recurrenceDays,
       checklist: data.checklist,
       tags: data.tags || [],
       audioStorageId,
@@ -292,6 +323,37 @@ export default function DashboardPage() {
         ) : (
           /* Items Grid */
           <div className="space-y-6">
+            {/* Today's Reminders (High Priority at Top) */}
+            {todayReminders.length > 0 && (
+              <div className="space-y-3 rounded-2xl border border-amber-200/90 bg-amber-50/50 p-4 shadow-xs dark:border-amber-900/50 dark:bg-amber-950/20">
+                <div className="flex items-center justify-between border-b border-amber-200/60 pb-2.5 dark:border-amber-900/40">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500 text-white shadow-xs text-sm">
+                      🔔
+                    </span>
+                    <h2 className="text-sm font-bold tracking-tight text-amber-950 dark:text-amber-100">
+                      Today&apos;s Reminders
+                    </h2>
+                    <span className="rounded-full bg-amber-200/80 px-2.5 py-0.5 text-xs font-bold text-amber-900 dark:bg-amber-900/80 dark:text-amber-200 font-mono">
+                      {todayReminders.length}
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-medium text-amber-700/80 dark:text-amber-300/80">
+                    Sorted by time
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 pt-1">
+                  {todayReminders.map((item) => (
+                    <ItemCard
+                      key={item._id}
+                      item={item as ItemRecord}
+                      onEdit={setEditingItem}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Pinned Items */}
             {pinnedItems.length > 0 && (
               <div className="space-y-3">
@@ -310,12 +372,12 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {/* Regular Items */}
+            {/* Other Items */}
             {regularItems.length > 0 && (
               <div className="space-y-3">
-                {pinnedItems.length > 0 && (
+                {(todayReminders.length > 0 || pinnedItems.length > 0) && (
                   <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                    All Items
+                    All Other Items ({regularItems.length})
                   </h2>
                 )}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

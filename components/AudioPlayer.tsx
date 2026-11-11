@@ -4,27 +4,47 @@ import { useState, useRef, useEffect } from "react";
 
 interface AudioPlayerProps {
   src: string;
+  initialDuration?: number;
 }
 
-export function AudioPlayer({ src }: AudioPlayerProps) {
+export function AudioPlayer({ src, initialDuration = 0 }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [mediaDuration, setMediaDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
+
+  const duration = mediaDuration > 0 ? mediaDuration : initialDuration;
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     const handleLoadedMetadata = () => {
-      if (Number.isFinite(audio.duration)) {
-        setDuration(audio.duration);
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        setMediaDuration(audio.duration);
+      } else if (audio.duration === Infinity) {
+        // Fix for Chromium WebM duration bug
+        audio.currentTime = 1e101;
+        audio.ontimeupdate = () => {
+          audio.ontimeupdate = null;
+          if (Number.isFinite(audio.duration) && audio.duration > 0) {
+            setMediaDuration(audio.duration);
+          } else if (Number.isFinite(audio.currentTime) && audio.currentTime > 0) {
+            setMediaDuration(audio.currentTime);
+          }
+          audio.currentTime = 0;
+        };
       }
     };
 
     const handleTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        setMediaDuration(audio.duration);
+      } else if (audio.currentTime > duration) {
+        setMediaDuration(Math.ceil(audio.currentTime));
+      }
     };
 
     const handleEnded = () => {
@@ -41,7 +61,7 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("ended", handleEnded);
     };
-  }, []);
+  }, [duration]);
 
   const togglePlay = () => {
     if (!audioRef.current) return;
@@ -108,7 +128,7 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
         <input
           type="range"
           min={0}
-          max={duration || 100}
+          max={Math.max(duration, currentTime, 1)}
           step={0.1}
           value={currentTime}
           onChange={handleSeek}
@@ -116,7 +136,9 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
         />
         <div className="flex justify-between text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
           <span>{format(currentTime)}</span>
-          <span>{format(duration)}</span>
+          <span className="font-semibold text-zinc-700 dark:text-zinc-300">
+            {format(duration)}
+          </span>
         </div>
       </div>
 

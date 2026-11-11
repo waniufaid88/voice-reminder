@@ -63,6 +63,11 @@ export const create = mutation({
     reminderStatus: v.optional(
       v.union(v.literal("pending"), v.literal("completed"))
     ),
+    isDaily: v.optional(v.boolean()),
+    recurrenceMode: v.optional(
+      v.union(v.literal("once"), v.literal("daily"), v.literal("custom"))
+    ),
+    recurrenceDays: v.optional(v.array(v.number())),
     checklist: v.optional(
       v.array(
         v.object({
@@ -87,6 +92,9 @@ export const create = mutation({
       dueDate: args.dueDate,
       reminderStatus:
         args.type === "reminder" ? args.reminderStatus ?? "pending" : undefined,
+      isDaily: args.isDaily,
+      recurrenceMode: args.recurrenceMode ?? (args.isDaily ? "daily" : "once"),
+      recurrenceDays: args.recurrenceDays,
       isNotified: false,
       checklist: args.checklist,
       createdAt: now,
@@ -108,6 +116,11 @@ export const update = mutation({
     reminderStatus: v.optional(
       v.union(v.literal("pending"), v.literal("completed"))
     ),
+    isDaily: v.optional(v.boolean()),
+    recurrenceMode: v.optional(
+      v.union(v.literal("once"), v.literal("daily"), v.literal("custom"))
+    ),
+    recurrenceDays: v.optional(v.array(v.number())),
     checklist: v.optional(
       v.array(
         v.object({
@@ -130,6 +143,9 @@ export const update = mutation({
     if (fields.tags !== undefined) updates.tags = fields.tags;
     if (fields.dueDate !== undefined) updates.dueDate = fields.dueDate;
     if (fields.reminderStatus !== undefined) updates.reminderStatus = fields.reminderStatus;
+    if (fields.isDaily !== undefined) updates.isDaily = fields.isDaily;
+    if (fields.recurrenceMode !== undefined) updates.recurrenceMode = fields.recurrenceMode;
+    if (fields.recurrenceDays !== undefined) updates.recurrenceDays = fields.recurrenceDays;
     if (fields.checklist !== undefined) updates.checklist = fields.checklist;
 
     await ctx.db.patch(itemId, updates);
@@ -177,10 +193,71 @@ export const toggleReminderStatus = mutation({
     const item = await ctx.db.get(args.itemId);
     if (!item) throw new Error("Item not found");
 
+    const isRecurring =
+      item.recurrenceMode === "daily" ||
+      item.recurrenceMode === "custom" ||
+      item.isDaily;
+
+    // If it's a recurring reminder and currently pending:
+    // Completing it for today advances the scheduled dueDate to the next occurrence
+    if (isRecurring && item.reminderStatus === "pending" && item.dueDate) {
+      let nextDueDate = item.dueDate + 24 * 60 * 60 * 1000;
+      const base = new Date(item.dueDate);
+      const hours = base.getHours();
+      const minutes = base.getMinutes();
+
+      if (
+        item.recurrenceMode === "custom" &&
+        item.recurrenceDays &&
+        item.recurrenceDays.length > 0
+      ) {
+        const days = item.recurrenceDays;
+        const today = new Date();
+        for (let offset = 1; offset <= 7; offset++) {
+          const candidate = new Date();
+          candidate.setDate(today.getDate() + offset);
+          candidate.setHours(hours, minutes, 0, 0);
+          if (days.includes(candidate.getDay())) {
+            nextDueDate = candidate.getTime();
+            break;
+          }
+        }
+      } else {
+        const nextDay = new Date();
+        nextDay.setDate(nextDay.getDate() + 1);
+        nextDay.setHours(hours, minutes, 0, 0);
+        nextDueDate = nextDay.getTime();
+      }
+
+      await ctx.db.patch(args.itemId, {
+        dueDate: nextDueDate,
+        reminderStatus: "pending",
+        isNotified: false,
+        updatedAt: Date.now(),
+      });
+      return { isRecurringAdvanced: true, nextDue: nextDueDate };
+    }
+
     const newStatus = item.reminderStatus === "completed" ? "pending" : "completed";
     await ctx.db.patch(args.itemId, {
       reminderStatus: newStatus,
       isNotified: newStatus === "completed",
+      updatedAt: Date.now(),
+    });
+    return { isRecurringAdvanced: false, status: newStatus };
+  },
+});
+
+export const stopDailyRepeat = mutation({
+  args: { itemId: v.id("items") },
+  handler: async (ctx, args) => {
+    const item = await ctx.db.get(args.itemId);
+    if (!item) throw new Error("Item not found");
+    await ctx.db.patch(args.itemId, {
+      isDaily: false,
+      recurrenceMode: "once",
+      reminderStatus: "completed",
+      isNotified: true,
       updatedAt: Date.now(),
     });
   },

@@ -31,12 +31,15 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
     register,
     handleSubmit,
     reset,
+    watch,
   } = useForm<CaptureFormValues>({
     resolver: zodResolver(captureSchema),
     defaultValues: {
       text: "",
     },
   });
+
+  const typedText = watch("text");
 
   const {
     isRecording,
@@ -273,22 +276,36 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
           /* Normal Capture Input Bar */
           <form
             onSubmit={handleSubmit(handleTextSubmit, handleTextError)}
-            className="flex items-center gap-2 rounded-2xl border border-zinc-200/90 bg-white p-2 shadow-sm transition-all focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-600/15 dark:border-zinc-800 dark:bg-zinc-900"
+            className="flex items-center gap-1.5 sm:gap-2 rounded-2xl border border-zinc-200/90 bg-white p-1.5 sm:p-2 shadow-sm transition-all focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-600/15 dark:border-zinc-800 dark:bg-zinc-900"
           >
             <input
               type="text"
               {...register("text")}
               disabled={isProcessing}
-              placeholder="Type a note, reminder, or task... (or click the microphone)"
-              className="flex-1 bg-transparent px-3 py-1.5 text-sm text-zinc-900 placeholder-zinc-400 focus:outline-none dark:text-zinc-100 dark:placeholder-zinc-500"
+              placeholder="Type a note, reminder, or task..."
+              className="flex-1 bg-transparent px-2.5 sm:px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:outline-none dark:text-zinc-100 dark:placeholder-zinc-500 min-w-0"
             />
+
+            {/* Save Button */}
+            <Button
+              type="submit"
+              disabled={isProcessing || !typedText?.trim()}
+              size="sm"
+              className="h-10 px-3.5 sm:px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-sm shadow-indigo-600/20 shrink-0 flex items-center gap-1.5 transition-all disabled:opacity-40"
+              title="Save typed text"
+            >
+              <span>Save</span>
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </Button>
 
             {/* Mic Record Button */}
             <button
               type="button"
               onClick={startRecording}
               disabled={isProcessing}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm shadow-indigo-600/20 transition-transform hover:scale-105 hover:bg-indigo-500 focus:outline-none"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition-transform active:scale-95 focus:outline-none"
               title="Record voice note"
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

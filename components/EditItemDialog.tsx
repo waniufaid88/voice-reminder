@@ -8,6 +8,7 @@ import toast from "react-hot-toast";
 
 import { api } from "@/convex/_generated/api";
 import { ItemRecord } from "./ItemCard";
+import { RecurrenceSelector } from "./RecurrenceSelector";
 import { formatLocalDatetime, parseLocalDatetime } from "@/lib/date-utils";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
 import {
@@ -46,6 +47,9 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
       title: "",
       content: "",
       dueDateString: "",
+      isDaily: false,
+      recurrenceMode: "once",
+      recurrenceDays: [new Date().getDay()],
       checklist: [],
       tags: [],
     },
@@ -55,6 +59,8 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
   const currentType = watch("type");
   const currentTags = watch("tags") || [];
   const currentChecklist = watch("checklist") || [];
+  const currentRecurrenceMode = (watch("recurrenceMode") as "once" | "daily" | "custom") || "once";
+  const currentRecurrenceDays = watch("recurrenceDays") || [new Date().getDay()];
 
   useEffect(() => {
     if (item) {
@@ -63,6 +69,9 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
         title: item.title,
         content: item.content || "",
         dueDateString: formatLocalDatetime(item.dueDate),
+        isDaily: Boolean(item.isDaily),
+        recurrenceMode: item.recurrenceMode || (item.isDaily ? "daily" : "once"),
+        recurrenceDays: item.recurrenceDays || [new Date().getDay()],
         checklist: item.checklist || [],
         tags: item.tags || [],
       });
@@ -137,6 +146,12 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
         type: values.type,
         tags: values.tags,
         dueDate,
+        isDaily: values.type === "reminder" ? values.recurrenceMode === "daily" : undefined,
+        recurrenceMode: values.type === "reminder" ? (values.recurrenceMode || "once") : undefined,
+        recurrenceDays:
+          values.type === "reminder" && values.recurrenceMode === "custom"
+            ? values.recurrenceDays
+            : undefined,
         checklist: values.type === "list" ? values.checklist : undefined,
       });
 
@@ -252,19 +267,34 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
 
           {/* Reminder Due Date with Zod Validation */}
           {currentType === "reminder" && (
-            <FormField
-              control={form.control}
-              name="dueDateString"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Due Date & Time</FormLabel>
-                  <FormControl>
-                    <Input type="datetime-local" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <div className="space-y-3">
+              <FormField
+                control={form.control}
+                name="dueDateString"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Due Date & Time</FormLabel>
+                    <FormControl>
+                      <Input type="datetime-local" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Recurrence Frequency (Once, Daily, Custom Days) */}
+              <RecurrenceSelector
+                mode={currentRecurrenceMode}
+                selectedDays={currentRecurrenceDays}
+                onChangeMode={(mode) => {
+                  setValue("recurrenceMode", mode, { shouldValidate: true });
+                  setValue("isDaily", mode === "daily", { shouldValidate: true });
+                }}
+                onChangeDays={(days) => {
+                  setValue("recurrenceDays", days, { shouldValidate: true });
+                }}
+              />
+            </div>
           )}
 
           {/* Checklist items */}

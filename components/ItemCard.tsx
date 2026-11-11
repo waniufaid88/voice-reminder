@@ -10,7 +10,11 @@ import { AudioPlayer } from "./AudioPlayer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { formatReadableDueDate } from "@/lib/date-utils";
+import {
+  formatReadableDueDate,
+  formatAudioDuration,
+  formatRecurrenceLabel,
+} from "@/lib/date-utils";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,6 +38,9 @@ export interface ItemRecord {
   audioDuration?: number;
   dueDate?: number;
   reminderStatus?: "pending" | "completed";
+  isDaily?: boolean;
+  recurrenceMode?: "once" | "daily" | "custom";
+  recurrenceDays?: number[];
   checklist?: Array<{ id: string; text: string; completed: boolean }>;
   createdAt: number;
 }
@@ -103,10 +110,16 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
   };
 
   const handleToggleReminder = async () => {
-    await toggleReminderStatus({ itemId: item._id });
-    toast.success(
-      isCompletedReminder ? "Restored reminder" : "Reminder completed! 🎉"
-    );
+    const res = await toggleReminderStatus({ itemId: item._id });
+    if (res?.isRecurringAdvanced) {
+      toast.success(
+        `Completed for today! Next: ${formatReadableDueDate(res.nextDue)} 🔁`
+      );
+    } else {
+      toast.success(
+        isCompletedReminder ? "Restored reminder" : "Reminder completed! 🎉"
+      );
+    }
   };
 
   const handleSnooze = async (minutes: number, label: string) => {
@@ -134,18 +147,36 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
               </Badge>
             )}
             {item.type === "reminder" && (
-              <Badge
-                variant={
-                  isCompletedReminder
-                    ? "secondary"
-                    : isOverdue
-                      ? "destructive"
-                      : "amber"
-                }
-                className={isCompletedReminder ? "line-through text-zinc-400" : ""}
-              >
-                ⏰ Reminder
-              </Badge>
+              <>
+                <Badge
+                  variant={
+                    isCompletedReminder
+                      ? "secondary"
+                      : isOverdue
+                        ? "destructive"
+                        : "amber"
+                  }
+                  className={isCompletedReminder ? "line-through text-zinc-400" : ""}
+                >
+                  ⏰ Reminder
+                </Badge>
+                {(item.recurrenceMode === "daily" || item.isDaily) && (
+                  <Badge
+                    variant="outline"
+                    className="border-amber-400/70 text-amber-800 bg-amber-50/60 dark:border-amber-700/60 dark:text-amber-300 dark:bg-amber-950/40 text-[11px] font-medium"
+                  >
+                    🔁 Daily
+                  </Badge>
+                )}
+                {item.recurrenceMode === "custom" && (
+                  <Badge
+                    variant="outline"
+                    className="border-amber-400/70 text-amber-800 bg-amber-50/60 dark:border-amber-700/60 dark:text-amber-300 dark:bg-amber-950/40 text-[11px] font-medium"
+                  >
+                    📅 {formatRecurrenceLabel(item.recurrenceMode, item.recurrenceDays)}
+                  </Badge>
+                )}
+              </>
             )}
             {item.type === "list" && (
               <Badge variant="emerald" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
@@ -263,9 +294,13 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
                 size="sm"
                 variant={isCompletedReminder ? "secondary" : "default"}
                 onClick={handleToggleReminder}
-                className={!isCompletedReminder ? "bg-emerald-600 hover:bg-emerald-500 text-white" : ""}
+                className={!isCompletedReminder ? "bg-emerald-600 hover:bg-emerald-500 text-white text-xs" : "text-xs"}
               >
-                {isCompletedReminder ? "↺ Undo" : "✓ Done"}
+                {isCompletedReminder
+                  ? "↺ Undo"
+                  : item.recurrenceMode === "daily" || item.recurrenceMode === "custom" || item.isDaily
+                    ? "✓ Done Today"
+                    : "✓ Done"}
               </Button>
 
               {/* Snooze Dropdown */}
@@ -349,10 +384,24 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
           </p>
         )}
 
-        {/* Audio Player */}
+        {/* Audio Player & Duration */}
         {audioUrl && (
-          <div className="mt-3">
-            <AudioPlayer src={audioUrl} />
+          <div className="mt-3 space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                <span>🎙️</span>
+                <span>Voice Note</span>
+              </span>
+              {item.audioDuration && item.audioDuration > 0 ? (
+                <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-mono font-bold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                  ⏱ {formatAudioDuration(item.audioDuration)}
+                </span>
+              ) : null}
+            </div>
+            <AudioPlayer
+              src={audioUrl}
+              initialDuration={item.audioDuration}
+            />
           </div>
         )}
       </div>

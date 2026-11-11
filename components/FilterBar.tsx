@@ -30,11 +30,11 @@ export function FilterBar({
     <div className="space-y-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         {/* Type Tabs */}
-        <div className="flex rounded-xl bg-zinc-100 p-1 dark:bg-zinc-800/80">
+        <div className="flex items-center gap-1 overflow-x-auto rounded-xl bg-zinc-100 p-1 dark:bg-zinc-800/80">
           <button
             type="button"
             onClick={() => onTabChange("all")}
-            className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-all ${
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
               activeTab === "all"
                 ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-900 dark:text-zinc-50"
                 : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -45,7 +45,7 @@ export function FilterBar({
           <button
             type="button"
             onClick={() => onTabChange("note")}
-            className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-all ${
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
               activeTab === "note"
                 ? "bg-white text-indigo-700 shadow-xs dark:bg-zinc-900 dark:text-indigo-400"
                 : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -56,7 +56,7 @@ export function FilterBar({
           <button
             type="button"
             onClick={() => onTabChange("reminder")}
-            className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-all ${
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
               activeTab === "reminder"
                 ? "bg-white text-amber-700 shadow-xs dark:bg-zinc-900 dark:text-amber-400"
                 : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -67,7 +67,7 @@ export function FilterBar({
           <button
             type="button"
             onClick={() => onTabChange("list")}
-            className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-all ${
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
               activeTab === "list"
                 ? "bg-white text-emerald-700 shadow-xs dark:bg-zinc-900 dark:text-emerald-400"
                 : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"

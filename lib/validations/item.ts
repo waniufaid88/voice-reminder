@@ -12,6 +12,9 @@ export const itemSchema = z
     title: z.string().trim().min(1, "Title is required"),
     content: z.string(),
     dueDateString: z.string().optional(),
+    isDaily: z.boolean().optional(),
+    recurrenceMode: z.enum(["once", "daily", "custom"]).optional(),
+    recurrenceDays: z.array(z.number()).optional(),
     checklist: z.array(checklistItemSchema).optional(),
     tags: z.array(z.string()),
   })

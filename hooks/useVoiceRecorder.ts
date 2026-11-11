@@ -48,6 +48,8 @@ export function useVoiceRecorder() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const speechTranscriptRef = useRef<string>("");
+  const startTimeRef = useRef<number>(0);
+  const elapsedTimeRef = useRef<number>(0);
 
   // Clean up on unmount
   useEffect(() => {
@@ -74,6 +76,8 @@ export function useVoiceRecorder() {
     setDuration(0);
     setLiveTranscript("");
     speechTranscriptRef.current = "";
+    startTimeRef.current = Date.now();
+    elapsedTimeRef.current = 0;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -162,8 +166,9 @@ export function useVoiceRecorder() {
 
       // Duration counter
       timerRef.current = setInterval(() => {
-        setDuration((prev) => prev + 1);
-      }, 1000);
+        const ms = elapsedTimeRef.current + (Date.now() - startTimeRef.current);
+        setDuration(Math.floor(ms / 1000));
+      }, 250);
     } catch (err: unknown) {
       const isNotAllowed = err instanceof Error && err.name === "NotAllowedError";
       const message = err instanceof Error ? err.message : String(err);
@@ -183,6 +188,7 @@ export function useVoiceRecorder() {
       mediaRecorderRef.current.pause();
       setIsPaused(true);
       if (timerRef.current) clearInterval(timerRef.current);
+      elapsedTimeRef.current += Date.now() - startTimeRef.current;
     }
   }, []);
 
@@ -190,15 +196,23 @@ export function useVoiceRecorder() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "paused") {
       mediaRecorderRef.current.resume();
       setIsPaused(false);
+      startTimeRef.current = Date.now();
       timerRef.current = setInterval(() => {
-        setDuration((prev) => prev + 1);
-      }, 1000);
+        const ms = elapsedTimeRef.current + (Date.now() - startTimeRef.current);
+        setDuration(Math.floor(ms / 1000));
+      }, 250);
     }
   }, []);
 
   const stopRecording = useCallback((): Promise<RecordingResult | null> => {
     return new Promise((resolve) => {
       if (timerRef.current) clearInterval(timerRef.current);
+
+      let totalMs = elapsedTimeRef.current;
+      if (mediaRecorderRef.current?.state === "recording") {
+        totalMs += Date.now() - startTimeRef.current;
+      }
+      const calculatedDuration = Math.max(1, Math.round(totalMs / 1000));
 
       if (speechRecognitionRef.current) {
         try {
@@ -220,7 +234,6 @@ export function useVoiceRecorder() {
         const mimeType = mediaRecorderRef.current?.mimeType || "audio/webm";
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
         const url = URL.createObjectURL(blob);
-        const finalDuration = duration;
         const finalTranscript = speechTranscriptRef.current.trim();
 
         // Cleanup audio stream
@@ -241,7 +254,7 @@ export function useVoiceRecorder() {
         setIsPaused(false);
         resolve({
           blob,
-          duration: finalDuration,
+          duration: calculatedDuration,
           url,
           browserTranscript: finalTranscript,
         });
@@ -249,7 +262,7 @@ export function useVoiceRecorder() {
 
       mediaRecorderRef.current.stop();
     });
-  }, [duration]);
+  }, []);
 
   const cancelRecording = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -274,6 +287,8 @@ export function useVoiceRecorder() {
     analyserRef.current = null;
     setAnalyser(null);
     audioChunksRef.current = [];
+    startTimeRef.current = 0;
+    elapsedTimeRef.current = 0;
     setIsRecording(false);
     setIsPaused(false);
     setDuration(0);

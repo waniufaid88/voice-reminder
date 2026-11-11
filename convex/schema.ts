@@ -37,6 +37,11 @@ export default defineSchema({
       v.union(v.literal("pending"), v.literal("completed"))
     ),
     isNotified: v.optional(v.boolean()),
+    isDaily: v.optional(v.boolean()),
+    recurrenceMode: v.optional(
+      v.union(v.literal("once"), v.literal("daily"), v.literal("custom"))
+    ),
+    recurrenceDays: v.optional(v.array(v.number())),
 
     // List specific fields
     checklist: v.optional(

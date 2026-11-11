@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useQuery, useMutation } from "convex/react";
+import toast from "react-hot-toast";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 
@@ -14,11 +15,14 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
   const markNotified = useMutation(api.items.markNotified);
   const toggleReminderStatus = useMutation(api.items.toggleReminderStatus);
   const snoozeReminder = useMutation(api.items.snoozeReminder);
+  const stopDailyRepeat = useMutation(api.items.stopDailyRepeat);
 
   const [alertingItem, setAlertingItem] = useState<{
     _id: Id<"items">;
     title: string;
     content: string;
+    isRecurring: boolean;
+    recurrenceMode?: "once" | "daily" | "custom";
   } | null>(null);
 
   const notifiedIdsRef = useRef<Set<string>>(new Set());
@@ -88,11 +92,18 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
           // Play chime sound
           playChime();
 
+          const isRecurring =
+            item.recurrenceMode === "daily" ||
+            item.recurrenceMode === "custom" ||
+            Boolean(item.isDaily);
+
           // Show in-app banner
           setAlertingItem({
             _id: item._id,
             title: item.title,
             content: item.content,
+            isRecurring,
+            recurrenceMode: item.recurrenceMode,
           });
 
           // Show Desktop browser notification
@@ -125,9 +136,16 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
           ⏰
         </div>
         <div className="flex-1">
-          <h4 className="text-sm font-bold text-amber-950 dark:text-amber-100">
-            Reminder: {alertingItem.title}
-          </h4>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <h4 className="text-sm font-bold text-amber-950 dark:text-amber-100">
+              Reminder: {alertingItem.title}
+            </h4>
+            {alertingItem.isRecurring && (
+              <span className="rounded-md bg-amber-200/80 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900 dark:bg-amber-900/80 dark:text-amber-200">
+                🔁 Recurring
+              </span>
+            )}
+          </div>
           {alertingItem.content && (
             <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300 line-clamp-2">
               {alertingItem.content}
@@ -138,18 +156,37 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
           <div className="mt-3 flex flex-wrap gap-1.5">
             <button
               type="button"
-              onClick={() => {
-                toggleReminderStatus({ itemId: alertingItem._id });
+              onClick={async () => {
+                const res = await toggleReminderStatus({ itemId: alertingItem._id });
+                if (res?.isRecurringAdvanced) {
+                  toast.success("Completed for today! Repeated schedule updated 🔁");
+                } else {
+                  toast.success("Reminder completed! 🎉");
+                }
                 setAlertingItem(null);
               }}
               className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500"
             >
-              ✓ Mark Done
+              {alertingItem.isRecurring ? "✓ Done for Today" : "✓ Mark Done"}
             </button>
+            {alertingItem.isRecurring && (
+              <button
+                type="button"
+                onClick={async () => {
+                  await stopDailyRepeat({ itemId: alertingItem._id });
+                  toast.success("Repeat cancelled & marked completed");
+                  setAlertingItem(null);
+                }}
+                className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-100"
+              >
+                Stop Repeat
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => {
-                snoozeReminder({ itemId: alertingItem._id, minutes: 15 });
+              onClick={async () => {
+                await snoozeReminder({ itemId: alertingItem._id, minutes: 15 });
+                toast.success("Snoozed for 15 mins");
                 setAlertingItem(null);
               }}
               className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-100"
@@ -158,8 +195,9 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
             </button>
             <button
               type="button"
-              onClick={() => {
-                snoozeReminder({ itemId: alertingItem._id, minutes: 60 });
+              onClick={async () => {
+                await snoozeReminder({ itemId: alertingItem._id, minutes: 60 });
+                toast.success("Snoozed for 1 hour");
                 setAlertingItem(null);
               }}
               className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-100"

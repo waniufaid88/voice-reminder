@@ -74,3 +74,107 @@ export function formatReadableDueDate(timestamp?: number | null): string {
   })} at ${timeStr}`;
 }
 
+/**
+ * Formats duration in seconds into a clean human string (e.g. "15s" or "1m 24s").
+ */
+export function formatAudioDuration(seconds?: number | null): string {
+  if (!seconds || seconds <= 0) return "0s";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  if (mins === 0) return `${secs}s`;
+  return `${mins}m ${secs.toString().padStart(2, "0")}s`;
+}
+
+/**
+ * Checks if a timestamp falls within today in user's local timezone.
+ */
+export function isDateToday(timestamp?: number | null): boolean {
+  if (!timestamp) return false;
+  const date = new Date(timestamp);
+  const today = new Date();
+  return (
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  );
+}
+
+export const DAY_NAMES_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * Formats recurrence mode and days into human readable text (e.g. "Daily", "Mon, Wed, Fri", "Once")
+ */
+export function formatRecurrenceLabel(
+  mode?: "once" | "daily" | "custom",
+  days?: number[]
+): string {
+  if (mode === "daily") return "Every day";
+  if (mode === "custom" && days && days.length > 0) {
+    if (days.length === 7) return "Every day";
+    const sortedDays = [...days].sort((a, b) => a - b);
+    if (
+      sortedDays.length === 5 &&
+      sortedDays[0] === 1 &&
+      sortedDays[1] === 2 &&
+      sortedDays[2] === 3 &&
+      sortedDays[3] === 4 &&
+      sortedDays[4] === 5
+    ) {
+      return "Weekdays (Mon-Fri)";
+    }
+    if (sortedDays.length === 2 && sortedDays.includes(0) && sortedDays.includes(6)) {
+      return "Weekends (Sat-Sun)";
+    }
+    return sortedDays.map((d) => DAY_NAMES_SHORT[d]).join(", ");
+  }
+  return "One time";
+}
+
+/**
+ * Calculates the next recurrence date for daily or custom days recurrence
+ */
+export function calculateNextRecurrence(
+  baseDueDateMs: number,
+  mode: "daily" | "custom",
+  customDays?: number[]
+): number {
+  const base = new Date(baseDueDateMs);
+  const hours = base.getHours();
+  const minutes = base.getMinutes();
+
+  if (mode === "daily") {
+    const todayAtTime = new Date();
+    todayAtTime.setHours(hours, minutes, 0, 0);
+
+    if (todayAtTime.getTime() > Date.now()) {
+      return todayAtTime.getTime();
+    }
+    todayAtTime.setDate(todayAtTime.getDate() + 1);
+    return todayAtTime.getTime();
+  }
+
+  // Custom days of week
+  const days = customDays && customDays.length > 0 ? customDays : [new Date().getDay()];
+  const today = new Date();
+  const todayDay = today.getDay();
+  const todayTime = new Date();
+  todayTime.setHours(hours, minutes, 0, 0);
+
+  if (days.includes(todayDay) && todayTime.getTime() > Date.now()) {
+    return todayTime.getTime();
+  }
+
+  for (let offset = 1; offset <= 7; offset++) {
+    const candidate = new Date();
+    candidate.setDate(today.getDate() + offset);
+    candidate.setHours(hours, minutes, 0, 0);
+    if (days.includes(candidate.getDay())) {
+      return candidate.getTime();
+    }
+  }
+
+  return baseDueDateMs + 24 * 60 * 60 * 1000;
+}
+
+
+
