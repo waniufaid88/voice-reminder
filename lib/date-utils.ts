@@ -61,14 +61,18 @@ export function formatReadableDueDate(timestamp?: number | null): string {
   const isTomorrow = date.toDateString() === tomorrow.toDateString();
 
   const timeStr = date.toLocaleTimeString([], {
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
+    hour12: true,
   });
 
+  const dayOfWeek = date.toLocaleDateString([], { weekday: "short" });
+
   if (isToday) return `Today at ${timeStr}`;
-  if (isTomorrow) return `Tomorrow at ${timeStr}`;
+  if (isTomorrow) return `Tomorrow (${dayOfWeek}) at ${timeStr}`;
 
   return `${date.toLocaleDateString([], {
+    weekday: "short",
     month: "short",
     day: "numeric",
   })} at ${timeStr}`;

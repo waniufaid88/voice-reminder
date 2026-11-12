@@ -1,19 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
+import { parseNaturalReminder } from "@/lib/natural-date-parser";
+import { parseLocalDatetime } from "@/lib/date-utils";
 
-// Fallback rule-based extractor when OpenAI quota is exhausted or offline
-function parseTextRuleBased(rawText: string) {
+// Intelligent rule-based extractor with full natural date, time, and recurrence support
+function parseTextRuleBased(rawText: string, refDate: Date = new Date()) {
+  const natural = parseNaturalReminder(rawText, refDate);
+
+  if (natural.isReminder) {
+    return {
+      type: "reminder" as const,
+      title: natural.title,
+      content: rawText,
+      dueDate: natural.dueDate,
+      dueDateLocal: natural.dueDateLocal,
+      recurrenceMode: natural.recurrenceMode || "once",
+      recurrenceDays: natural.recurrenceDays,
+      isDaily: natural.recurrenceMode === "daily",
+      checklist: undefined,
+      tags: [
+        "#reminder",
+        natural.recurrenceMode === "daily" ? "#daily" : "#task",
+      ],
+    };
+  }
+
   const lower = rawText.toLowerCase().trim();
   const words = rawText.trim().split(/\s+/);
-  const title = words.slice(0, 6).join(" ") || "Voice Note";
-
-  const isReminder =
-    lower.includes("remind") ||
-    lower.includes("tomorrow") ||
-    lower.includes("at ") ||
-    lower.includes("tonight") ||
-    lower.includes("schedule") ||
-    lower.includes("appointment") ||
-    lower.includes("meeting");
+  const title = words.slice(0, 6).join(" ") || "Note";
 
   const isList =
     lower.includes("buy ") ||
@@ -24,21 +37,7 @@ function parseTextRuleBased(rawText: string) {
     rawText.includes(",") ||
     rawText.includes(" and ");
 
-  if (isReminder) {
-    // Default reminder due date: tomorrow at 9 AM, or +2 hours
-    const dueDate = Date.now() + 2 * 60 * 60 * 1000;
-    return {
-      type: "reminder" as const,
-      title: title.charAt(0).toUpperCase() + title.slice(1),
-      content: rawText,
-      dueDate,
-      checklist: undefined,
-      tags: ["#reminder", "#voice"],
-    };
-  }
-
   if (isList) {
-    // Split checklist items by commas, newlines, or 'and'
     const rawItems = rawText
       .replace(/^.*(?:buy|list|get)\s+/i, "")
       .split(/,|\band\b|\n/i)
@@ -48,10 +47,10 @@ function parseTextRuleBased(rawText: string) {
     const checklist =
       rawItems.length > 0
         ? rawItems.map((text, idx) => ({
-          id: (idx + 1).toString(),
-          text: text.charAt(0).toUpperCase() + text.slice(1),
-          completed: false,
-        }))
+            id: (idx + 1).toString(),
+            text: text.charAt(0).toUpperCase() + text.slice(1),
+            completed: false,
+          }))
         : [{ id: "1", text: rawText, completed: false }];
 
     return {
@@ -81,12 +80,18 @@ export async function POST(req: NextRequest) {
 
   let rawText = "";
   let fallbackText = "";
+  let clientTimezone = "";
+  let clientNowISO = "";
+  let clientNowLocal = "";
 
   try {
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
       const audioFile = formData.get("audio") as Blob | null;
       fallbackText = (formData.get("fallbackText") as string) || "";
+      clientTimezone = (formData.get("clientTimezone") as string) || "";
+      clientNowISO = (formData.get("clientNowISO") as string) || "";
+      clientNowLocal = (formData.get("clientNowLocal") as string) || "";
 
       if (audioFile && apiKey) {
         // Step 1: Send audio to OpenAI Whisper API
@@ -111,10 +116,7 @@ export async function POST(req: NextRequest) {
           } else {
             const errJson = await whisperRes.json().catch(() => ({}));
             console.warn("Whisper API error:", errJson);
-            // If OpenAI quota exhausted or failed, use fallback browser transcript
-            if (fallbackText) {
-              rawText = fallbackText;
-            }
+            if (fallbackText) rawText = fallbackText;
           }
         } catch (whisperErr) {
           console.warn("Whisper request failed:", whisperErr);
@@ -127,9 +129,11 @@ export async function POST(req: NextRequest) {
       // Direct text input
       const json = await req.json();
       rawText = json.text || "";
+      clientTimezone = json.clientTimezone || "";
+      clientNowISO = json.clientNowISO || "";
+      clientNowLocal = json.clientNowLocal || "";
     }
 
-    // If Whisper didn't return text and we have fallbackText
     if (!rawText.trim() && fallbackText.trim()) {
       rawText = fallbackText.trim();
     }
@@ -144,22 +148,62 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Step 2: Structure with GPT-4o-mini if API key is present
+    const refDate = clientNowISO ? new Date(clientNowISO) : new Date();
+
+    // Step 2: Extract with deterministic natural parser as source of truth for exact numbers/times
+    const natural = parseNaturalReminder(rawText, refDate);
+
+    // Step 3: Structure with GPT-4o-mini if API key is present
     if (apiKey) {
       try {
+        const userLocalString = clientNowLocal || refDate.toLocaleString();
+        const userTz = clientTimezone || "User Local Time";
+        const todayDayName = refDate.toLocaleDateString("en-US", { weekday: "long" });
+        const todayDateStr = refDate.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+        const tomorrowDate = new Date(refDate.getTime() + 24 * 60 * 60 * 1000);
+        const tomorrowDayName = tomorrowDate.toLocaleDateString("en-US", {
+          weekday: "long",
+        });
+        const tomorrowDateStr = tomorrowDate.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+
         const systemPrompt = `You are an intelligent assistant that categorizes raw user thoughts/voice transcriptions into one of three formats:
 1. "note": General thought, meeting note, idea, journal, or informational summary.
-2. "reminder": A task with a specific deadline, due date, or future action.
+2. "reminder": A task with a specific deadline, due date, scheduled time, or future action.
 3. "list": A checklist of multiple actionable items, groceries, or todo steps.
 
-Current reference date/time: ${new Date().toISOString()} (${new Date().toLocaleString()}).
+CRITICAL DATE & TIME CONTEXT:
+- User's Current Local Time: ${userLocalString}
+- User's Timezone: ${userTz}
+- Today is: ${todayDayName}, ${todayDateStr}
+- Tomorrow is: ${tomorrowDayName}, ${tomorrowDateStr}
+
+Rules for reminders:
+- You MUST extract the EXACT time and day specified by the user (e.g. "4:30 pm" -> 16:30, "at 10 am" -> 10:00, "tomorrow at 5 pm" -> tomorrow at 17:00, "on Friday at 2 pm" -> upcoming Friday at 14:00).
+- If only a time is mentioned (e.g. "at 5 pm"): if that time today is in the future, set for today; if that time has already passed today, set for tomorrow.
+- Output "dueDateLocal" formatted as "YYYY-MM-DDTHH:mm" (24-hour local time format matching HTML5 datetime-local).
+- If recurrence is mentioned:
+  - "daily", "every day", "everyday" -> "recurrenceMode": "daily"
+  - "every weekday" -> "recurrenceMode": "custom", "recurrenceDays": [1,2,3,4,5]
+  - "every weekend" -> "recurrenceMode": "custom", "recurrenceDays": [0,6]
+  - specific days (e.g. "every monday and friday") -> "recurrenceMode": "custom", "recurrenceDays": [0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat]
+  - otherwise "recurrenceMode": "once"
 
 Respond ONLY with valid JSON with this exact structure:
 {
   "type": "note" | "reminder" | "list",
   "title": "Short descriptive title (3-6 words)",
   "content": "Cleaned up, well-punctuated transcript or summary",
-  "dueDate": timestamp_in_milliseconds_or_null_if_not_a_reminder,
+  "dueDateLocal": "YYYY-MM-DDTHH:mm" or null,
+  "recurrenceMode": "once" | "daily" | "custom",
+  "recurrenceDays": [1, 3] or null,
   "checklist": [
     { "id": "1", "text": "item description", "completed": false }
   ],
@@ -187,11 +231,42 @@ Respond ONLY with valid JSON with this exact structure:
           const gptData = await gptRes.json();
           const parsed = JSON.parse(gptData.choices[0].message.content);
 
+          let finalDueDate: number | undefined = undefined;
+          if (parsed.dueDateLocal) {
+            finalDueDate = parseLocalDatetime(parsed.dueDateLocal);
+          }
+
+          // If user typed/spoke an explicit time or day, but GPT missed or didn't set dueDateLocal
+          if (!finalDueDate && natural.dueDate) {
+            finalDueDate = natural.dueDate;
+            if (parsed.type !== "reminder") parsed.type = "reminder";
+          }
+
+          // If natural parser found explicit hours & minutes (e.g. "4:30 pm") and GPT set a different time or missed it:
+          if (natural.detectedTime && finalDueDate) {
+            const d = new Date(finalDueDate);
+            d.setHours(natural.detectedTime.hours, natural.detectedTime.minutes, 0, 0);
+            finalDueDate = d.getTime();
+          }
+
+          const recurrenceMode =
+            parsed.recurrenceMode || natural.recurrenceMode || "once";
+          const recurrenceDays =
+            parsed.recurrenceDays || natural.recurrenceDays;
+
           return NextResponse.json({
             success: true,
             usedOpenAI: true,
             rawTranscript: rawText,
-            ...parsed,
+            type: parsed.type || (natural.isReminder ? "reminder" : "note"),
+            title: parsed.title || natural.title,
+            content: parsed.content || rawText,
+            dueDate: finalDueDate,
+            recurrenceMode,
+            recurrenceDays,
+            isDaily: recurrenceMode === "daily",
+            checklist: parsed.checklist,
+            tags: parsed.tags || ["#voice"],
           });
         }
       } catch (gptErr) {
@@ -199,8 +274,8 @@ Respond ONLY with valid JSON with this exact structure:
       }
     }
 
-    // Fallback: Rule-based structuring (when OpenAI credit balance is exhausted or offline)
-    const structured = parseTextRuleBased(rawText);
+    // Fallback: Accurate rule-based structuring using natural date parser
+    const structured = parseTextRuleBased(rawText, refDate);
     return NextResponse.json({
       success: true,
       usedOpenAI: false,
@@ -209,10 +284,8 @@ Respond ONLY with valid JSON with this exact structure:
       ...structured,
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to process audio/text.";
-    return NextResponse.json(
-      { error: message },
-      { status: 500 }
-    );
+    const message =
+      error instanceof Error ? error.message : "Failed to process audio/text.";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

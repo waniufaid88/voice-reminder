@@ -10,6 +10,7 @@ import { api } from "@/convex/_generated/api";
 import { ItemRecord } from "./ItemCard";
 import { RecurrenceSelector } from "./RecurrenceSelector";
 import { formatLocalDatetime, parseLocalDatetime } from "@/lib/date-utils";
+import { parseNaturalReminder } from "@/lib/natural-date-parser";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
 import {
   Dialog,
@@ -205,8 +206,23 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
                 onClick={() => {
                   setValue("type", "reminder", { shouldValidate: true });
                   if (!getValues("dueDateString")) {
-                    const defaultTime = formatLocalDatetime(Date.now() + 2 * 60 * 60 * 1000);
-                    setValue("dueDateString", defaultTime, { shouldValidate: true });
+                    const natural = parseNaturalReminder(
+                      getValues("content") || getValues("title") || "",
+                      new Date()
+                    );
+                    if (natural.dueDate) {
+                      setValue("dueDateString", formatLocalDatetime(natural.dueDate), { shouldValidate: true });
+                      if (natural.recurrenceMode) {
+                        setValue("recurrenceMode", natural.recurrenceMode, { shouldValidate: true });
+                        setValue("isDaily", natural.recurrenceMode === "daily", { shouldValidate: true });
+                      }
+                      if (natural.recurrenceDays) {
+                        setValue("recurrenceDays", natural.recurrenceDays, { shouldValidate: true });
+                      }
+                    } else {
+                      const defaultTime = formatLocalDatetime(Date.now() + 2 * 60 * 60 * 1000);
+                      setValue("dueDateString", defaultTime, { shouldValidate: true });
+                    }
                   }
                 }}
               >

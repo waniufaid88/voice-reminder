@@ -8,6 +8,7 @@ import toast from "react-hot-toast";
 import { AudioPlayer } from "./AudioPlayer";
 import { RecurrenceSelector } from "./RecurrenceSelector";
 import { formatLocalDatetime, parseLocalDatetime, formatAudioDuration } from "@/lib/date-utils";
+import { parseNaturalReminder } from "@/lib/natural-date-parser";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
 import {
   Dialog,
@@ -90,14 +91,32 @@ export function ItemPreviewDialog({
           ? itemData.content
           : itemData.rawTranscript || "";
 
+      let calculatedDueDate = itemData.dueDate;
+      let calculatedMode =
+        itemData.recurrenceMode || (itemData.isDaily ? "daily" : "once");
+      let calculatedDays = itemData.recurrenceDays;
+
+      // If due date was not set, parse natural language from text or transcript
+      if (!calculatedDueDate) {
+        const natural = parseNaturalReminder(
+          cleanContent || itemData.title || "",
+          new Date()
+        );
+        if (natural.dueDate) {
+          calculatedDueDate = natural.dueDate;
+          if (natural.recurrenceMode) calculatedMode = natural.recurrenceMode;
+          if (natural.recurrenceDays) calculatedDays = natural.recurrenceDays;
+        }
+      }
+
       reset({
         type: itemData.type || "note",
         title: itemData.title || "Untitled",
         content: cleanContent,
-        dueDateString: formatLocalDatetime(itemData.dueDate),
-        isDaily: Boolean(itemData.isDaily),
-        recurrenceMode: itemData.recurrenceMode || (itemData.isDaily ? "daily" : "once"),
-        recurrenceDays: itemData.recurrenceDays || [new Date().getDay()],
+        dueDateString: formatLocalDatetime(calculatedDueDate),
+        isDaily: calculatedMode === "daily",
+        recurrenceMode: calculatedMode,
+        recurrenceDays: calculatedDays || [new Date().getDay()],
         checklist: itemData.checklist || [],
         tags: itemData.tags || ["#voice"],
       });
@@ -233,8 +252,23 @@ export function ItemPreviewDialog({
                 onClick={() => {
                   setValue("type", "reminder", { shouldValidate: true });
                   if (!getValues("dueDateString")) {
-                    const defaultTime = formatLocalDatetime(Date.now() + 2 * 60 * 60 * 1000);
-                    setValue("dueDateString", defaultTime, { shouldValidate: true });
+                    const natural = parseNaturalReminder(
+                      getValues("content") || getValues("title") || "",
+                      new Date()
+                    );
+                    if (natural.dueDate) {
+                      setValue("dueDateString", formatLocalDatetime(natural.dueDate), { shouldValidate: true });
+                      if (natural.recurrenceMode) {
+                        setValue("recurrenceMode", natural.recurrenceMode, { shouldValidate: true });
+                        setValue("isDaily", natural.recurrenceMode === "daily", { shouldValidate: true });
+                      }
+                      if (natural.recurrenceDays) {
+                        setValue("recurrenceDays", natural.recurrenceDays, { shouldValidate: true });
+                      }
+                    } else {
+                      const defaultTime = formatLocalDatetime(Date.now() + 2 * 60 * 60 * 1000);
+                      setValue("dueDateString", defaultTime, { shouldValidate: true });
+                    }
                   }
                 }}
               >

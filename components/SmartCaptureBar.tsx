@@ -10,6 +10,7 @@ import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { WaveformVisualizer } from "./WaveformVisualizer";
 import { ItemPreviewDialog, StructuredItemData } from "./ItemPreviewDialog";
 import { Button } from "@/components/ui/button";
+import { parseNaturalReminder } from "@/lib/natural-date-parser";
 
 const captureSchema = z.object({
   text: z.string().trim().min(1, "Please type a note, reminder, or task"),
@@ -62,19 +63,33 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
     setProcessingStatus("Structuring note with AI...");
 
     try {
+      const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const clientNowISO = new Date().toISOString();
+      const clientNowLocal = new Date().toString();
+
       const res = await fetch("/api/ai/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: values.text }),
+        body: JSON.stringify({
+          text: values.text,
+          clientTimezone,
+          clientNowISO,
+          clientNowLocal,
+        }),
       });
 
       const data = await res.json();
       if (!res.ok) {
+        const natural = parseNaturalReminder(values.text, new Date());
         setPreviewData({
-          type: "note",
-          title: values.text.slice(0, 30) || "New Note",
+          type: natural.isReminder ? "reminder" : "note",
+          title: natural.title || values.text.slice(0, 30) || "New Note",
           content: values.text,
-          tags: ["#note"],
+          dueDate: natural.dueDate,
+          recurrenceMode: natural.recurrenceMode || "once",
+          recurrenceDays: natural.recurrenceDays,
+          isDaily: natural.recurrenceMode === "daily",
+          tags: natural.isReminder ? ["#reminder"] : ["#note"],
         });
       } else {
         setPreviewData(data);
@@ -82,11 +97,16 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       setIsPreviewOpen(true);
       reset();
     } catch {
+      const natural = parseNaturalReminder(values.text, new Date());
       setPreviewData({
-        type: "note",
-        title: values.text.slice(0, 30) || "New Note",
+        type: natural.isReminder ? "reminder" : "note",
+        title: natural.title || values.text.slice(0, 30) || "New Note",
         content: values.text,
-        tags: ["#note"],
+        dueDate: natural.dueDate,
+        recurrenceMode: natural.recurrenceMode || "once",
+        recurrenceDays: natural.recurrenceDays,
+        isDaily: natural.recurrenceMode === "daily",
+        tags: natural.isReminder ? ["#reminder"] : ["#note"],
       });
       setIsPreviewOpen(true);
       reset();
@@ -116,6 +136,12 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       const formData = new FormData();
       formData.append("audio", result.blob, "voice-note.webm");
       formData.append("fallbackText", result.browserTranscript || "");
+      formData.append(
+        "clientTimezone",
+        Intl.DateTimeFormat().resolvedOptions().timeZone
+      );
+      formData.append("clientNowISO", new Date().toISOString());
+      formData.append("clientNowLocal", new Date().toString());
 
       const res = await fetch("/api/ai/process", {
         method: "POST",
@@ -125,16 +151,26 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       const data = await res.json();
       if (!res.ok) {
         toast("Saved voice recording.", { icon: "🎙️" });
+        const natural = parseNaturalReminder(
+          result.browserTranscript || "",
+          new Date()
+        );
         setPreviewData({
-          type: "note",
-          title: result.browserTranscript
-            ? result.browserTranscript.slice(0, 30)
-            : `Voice Note (${result.duration}s)`,
+          type: natural.isReminder ? "reminder" : "note",
+          title:
+            natural.title ||
+            (result.browserTranscript
+              ? result.browserTranscript.slice(0, 30)
+              : `Voice Note (${result.duration}s)`),
           content: result.browserTranscript || "Voice note recorded.",
+          dueDate: natural.dueDate,
+          recurrenceMode: natural.recurrenceMode || "once",
+          recurrenceDays: natural.recurrenceDays,
+          isDaily: natural.recurrenceMode === "daily",
           audioBlob: result.blob,
           audioDuration: result.duration,
           audioPreviewUrl: result.url,
-          tags: ["#voice"],
+          tags: natural.isReminder ? ["#reminder", "#voice"] : ["#voice"],
         });
       } else {
         if (data.isQuotaExhausted) {
@@ -154,16 +190,26 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       }
       setIsPreviewOpen(true);
     } catch {
+      const natural = parseNaturalReminder(
+        result.browserTranscript || "",
+        new Date()
+      );
       setPreviewData({
-        type: "note",
-        title: result.browserTranscript
-          ? result.browserTranscript.slice(0, 30)
-          : "Voice Recording",
+        type: natural.isReminder ? "reminder" : "note",
+        title:
+          natural.title ||
+          (result.browserTranscript
+            ? result.browserTranscript.slice(0, 30)
+            : "Voice Recording"),
         content: result.browserTranscript || "Recorded voice note.",
+        dueDate: natural.dueDate,
+        recurrenceMode: natural.recurrenceMode || "once",
+        recurrenceDays: natural.recurrenceDays,
+        isDaily: natural.recurrenceMode === "daily",
         audioBlob: result.blob,
         audioDuration: result.duration,
         audioPreviewUrl: result.url,
-        tags: ["#voice"],
+        tags: natural.isReminder ? ["#reminder", "#voice"] : ["#voice"],
       });
       setIsPreviewOpen(true);
     } finally {
