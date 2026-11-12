@@ -1,12 +1,13 @@
 /**
  * Natural language date, time, and recurrence parser.
  * Extracts exact days, times, and recurrence frequencies from user text or voice transcripts.
+ * Fully timezone-aware: immune to server/production UTC timezone variance.
  */
 
 export interface ParsedNaturalReminder {
   isReminder: boolean;
   title: string;
-  dueDate?: number; // epoch timestamp in ms (local time)
+  dueDate?: number; // epoch timestamp in ms (UTC)
   dueDateLocal?: string; // "YYYY-MM-DDTHH:mm" for datetime-local input
   recurrenceMode?: "once" | "daily" | "custom";
   recurrenceDays?: number[];
@@ -65,21 +66,40 @@ function pad(n: number): string {
   return n.toString().padStart(2, "0");
 }
 
-export function formatToLocalDatetimeString(date: Date): string {
-  const y = date.getFullYear();
-  const m = pad(date.getMonth() + 1);
-  const d = pad(date.getDate());
-  const hh = pad(date.getHours());
-  const mm = pad(date.getMinutes());
-  return `${y}-${m}-${d}T${hh}:${mm}`;
+export function formatToLocalDatetimeString(
+  year: number,
+  monthIndex: number,
+  day: number,
+  hours: number,
+  minutes: number
+): string {
+  return `${year}-${pad(monthIndex + 1)}-${pad(day)}T${pad(hours)}:${pad(minutes)}`;
 }
 
 export function parseNaturalReminder(
   rawText: string,
-  referenceDate: Date = new Date()
+  referenceDate: Date = new Date(),
+  clientTimezoneOffset?: number
 ): ParsedNaturalReminder {
   const text = rawText.trim();
   const lower = text.toLowerCase();
+
+  // Resolve timezone offset in minutes (e.g. -330 for IST UTC+5:30)
+  const offset =
+    clientTimezoneOffset !== undefined
+      ? clientTimezoneOffset
+      : typeof window !== "undefined"
+        ? new Date().getTimezoneOffset()
+        : 0;
+
+  // Compute the user's wall clock date (UTC getters return the user's local year/month/day/hour/min)
+  const userWallClockDate = new Date(referenceDate.getTime() - offset * 60 * 1000);
+  const userYear = userWallClockDate.getUTCFullYear();
+  const userMonth = userWallClockDate.getUTCMonth();
+  const userDay = userWallClockDate.getUTCDate();
+  const userDayOfWeek = userWallClockDate.getUTCDay();
+  const userHours = userWallClockDate.getUTCHours();
+  const userMinutes = userWallClockDate.getUTCMinutes();
 
   // 1. Check if input is likely a reminder
   const reminderKeywords = [
@@ -141,7 +161,7 @@ export function parseNaturalReminder(
     if (everyDayMatch) {
       const dayTokens = everyDayMatch[1].split(/[\s,]+and[\s,]+|[\s,]+/);
       for (const token of dayTokens) {
-        const cleaned = token.replace(/s$/, ""); // e.g. "mondays" -> "monday"
+        const cleaned = token.replace(/s$/, "");
         if (DAY_MAP[cleaned] !== undefined) {
           customDaysFound.add(DAY_MAP[cleaned]);
         }
@@ -165,25 +185,37 @@ export function parseNaturalReminder(
   if (relativeMatch) {
     const amount = parseInt(relativeMatch[1], 10);
     const unit = relativeMatch[2].toLowerCase();
-    const targetDate = new Date(referenceDate);
+    let deltaMs = 0;
 
     if (unit.startsWith("min")) {
-      targetDate.setMinutes(targetDate.getMinutes() + amount);
+      deltaMs = amount * 60 * 1000;
     } else if (unit.startsWith("hour") || unit.startsWith("hr")) {
-      targetDate.setHours(targetDate.getHours() + amount);
+      deltaMs = amount * 60 * 60 * 1000;
     } else if (unit.startsWith("day")) {
-      targetDate.setDate(targetDate.getDate() + amount);
+      deltaMs = amount * 24 * 60 * 60 * 1000;
     }
+
+    const finalDueDate = referenceDate.getTime() + deltaMs;
+    const targetWallClock = new Date(finalDueDate - offset * 60 * 1000);
+    const targetH = targetWallClock.getUTCHours();
+    const targetM = targetWallClock.getUTCMinutes();
+    const dueDateLocal = formatToLocalDatetimeString(
+      targetWallClock.getUTCFullYear(),
+      targetWallClock.getUTCMonth(),
+      targetWallClock.getUTCDate(),
+      targetH,
+      targetM
+    );
 
     const title = cleanReminderTitle(text);
     return {
       isReminder: true,
       title,
-      dueDate: targetDate.getTime(),
-      dueDateLocal: formatToLocalDatetimeString(targetDate),
+      dueDate: finalDueDate,
+      dueDateLocal,
       recurrenceMode,
       recurrenceDays,
-      detectedTime: { hours: targetDate.getHours(), minutes: targetDate.getMinutes() },
+      detectedTime: { hours: targetH, minutes: targetM },
     };
   }
 
@@ -234,7 +266,6 @@ export function parseNaturalReminder(
       if (meridian === "pm" && h < 12) h += 12;
       if (meridian === "am" && h === 12) h = 0;
       if (!meridian) {
-        // If hour between 1 and 6, default to afternoon/evening
         if (h >= 1 && h <= 6) h += 12;
       }
       extractedHours = h;
@@ -258,7 +289,6 @@ export function parseNaturalReminder(
         ) {
           if (h < 12) h += 12;
         } else {
-          // Heuristic: hours 1 to 7 usually mean afternoon/evening (e.g. "meeting at 4" = 16:00)
           if (h >= 1 && h <= 6) h += 12;
         }
         extractedHours = h;
@@ -290,34 +320,40 @@ export function parseNaturalReminder(
     }
   }
 
-  // 4. Extract Target Day / Date
-  const targetDate = new Date(referenceDate);
+  // 4. Extract Target Day / Date using User's Wall-Clock Time
+  let targetYear = userYear;
+  let targetMonth = userMonth;
+  let targetDay = userDay;
   let dayExplicitlyFound = false;
 
   if (lower.includes("day after tomorrow")) {
-    targetDate.setDate(targetDate.getDate() + 2);
+    const d = new Date(userWallClockDate);
+    d.setUTCDate(d.getUTCDate() + 2);
+    targetYear = d.getUTCFullYear();
+    targetMonth = d.getUTCMonth();
+    targetDay = d.getUTCDate();
     dayExplicitlyFound = true;
   } else if (lower.includes("tomorrow") || lower.includes("tmrw") || lower.includes("tom")) {
-    targetDate.setDate(targetDate.getDate() + 1);
+    const d = new Date(userWallClockDate);
+    d.setUTCDate(d.getUTCDate() + 1);
+    targetYear = d.getUTCFullYear();
+    targetMonth = d.getUTCMonth();
+    targetDay = d.getUTCDate();
     dayExplicitlyFound = true;
   } else if (lower.includes("today") || lower.includes("tonight")) {
-    // targetDate stays today
     dayExplicitlyFound = true;
   } else {
     // Check for days of the week: "monday", "friday", "on saturday", etc.
     for (const [dayName, targetDayNum] of Object.entries(DAY_MAP)) {
       const dayRegex = new RegExp(`\\b(?:on\\s+|this\\s+|next\\s+)?${dayName}\\b`, "i");
       if (dayRegex.test(lower)) {
-        const currentDayNum = referenceDate.getDay();
-        let daysUntil = (targetDayNum - currentDayNum + 7) % 7;
+        let daysUntil = (targetDayNum - userDayOfWeek + 7) % 7;
 
-        // If today is the day mentioned, but the user specifies a time:
         if (daysUntil === 0) {
           if (extractedHours !== null) {
-            const candidate = new Date(referenceDate);
-            candidate.setHours(extractedHours, extractedMinutes || 0, 0, 0);
-            if (candidate.getTime() <= referenceDate.getTime()) {
-              // Time has already passed today, so user means next week
+            const h = extractedHours;
+            const m = extractedMinutes || 0;
+            if (h < userHours || (h === userHours && m <= userMinutes)) {
               daysUntil = 7;
             }
           } else {
@@ -325,7 +361,11 @@ export function parseNaturalReminder(
           }
         }
 
-        targetDate.setDate(targetDate.getDate() + daysUntil);
+        const d = new Date(userWallClockDate);
+        d.setUTCDate(d.getUTCDate() + daysUntil);
+        targetYear = d.getUTCFullYear();
+        targetMonth = d.getUTCMonth();
+        targetDay = d.getUTCDate();
         dayExplicitlyFound = true;
         break;
       }
@@ -344,9 +384,14 @@ export function parseNaturalReminder(
 
         if (dateMatch) {
           const dayNum = parseInt(dateMatch[1], 10);
-          targetDate.setMonth(monthIndex, dayNum);
-          if (targetDate.getTime() < referenceDate.getTime() - 24 * 60 * 60 * 1000) {
-            targetDate.setFullYear(targetDate.getFullYear() + 1);
+          targetMonth = monthIndex;
+          targetDay = dayNum;
+          targetYear = userYear;
+          const candidateUtc =
+            Date.UTC(targetYear, targetMonth, targetDay, extractedHours || 9, extractedMinutes || 0) +
+            offset * 60 * 1000;
+          if (candidateUtc < referenceDate.getTime() - 24 * 60 * 60 * 1000) {
+            targetYear += 1;
           }
           dayExplicitlyFound = true;
           break;
@@ -356,33 +401,69 @@ export function parseNaturalReminder(
   }
 
   // 5. Combine Target Date with Target Time
-  let finalDueDate: number | undefined = undefined;
+  let finalHours = extractedHours;
+  let finalMinutes = extractedMinutes || 0;
 
   if (extractedHours !== null) {
-    const mins = extractedMinutes || 0;
-    targetDate.setHours(extractedHours, mins, 0, 0);
-
-    // If day was NOT explicitly mentioned, but a time was given:
-    // e.g. "meeting at 4:00 pm" or "call at 10 am"
     if (!dayExplicitlyFound) {
-      if (targetDate.getTime() <= referenceDate.getTime()) {
-        // That time today has already passed, schedule for tomorrow at that time!
-        targetDate.setDate(targetDate.getDate() + 1);
+      // If time has already passed today in user's timezone, move to tomorrow
+      if (
+        extractedHours < userHours ||
+        (extractedHours === userHours && finalMinutes <= userMinutes)
+      ) {
+        const d = new Date(userWallClockDate);
+        d.setUTCDate(d.getUTCDate() + 1);
+        targetYear = d.getUTCFullYear();
+        targetMonth = d.getUTCMonth();
+        targetDay = d.getUTCDate();
       }
     }
-    finalDueDate = targetDate.getTime();
   } else if (dayExplicitlyFound) {
-    // Day was mentioned, but no specific time -> default to 9:00 AM on that day
-    targetDate.setHours(9, 0, 0, 0);
-    // If 9 AM on that day is already past (e.g. user said "today" in afternoon), default to +2 hours
-    if (targetDate.getTime() <= referenceDate.getTime()) {
-      targetDate.setTime(referenceDate.getTime() + 2 * 60 * 60 * 1000);
+    // Day mentioned, no time -> default to 9:00 AM on that day
+    finalHours = 9;
+    finalMinutes = 0;
+    if (
+      targetDay === userDay &&
+      targetMonth === userMonth &&
+      targetYear === userYear &&
+      userHours >= 9
+    ) {
+      finalHours = userHours + 2;
+      finalMinutes = userMinutes;
+      if (finalHours >= 24) {
+        finalHours -= 24;
+        const d = new Date(userWallClockDate);
+        d.setUTCDate(d.getUTCDate() + 1);
+        targetYear = d.getUTCFullYear();
+        targetMonth = d.getUTCMonth();
+        targetDay = d.getUTCDate();
+      }
     }
-    finalDueDate = targetDate.getTime();
   } else if (isReminder) {
-    // General reminder with no day or time specified -> default to +2 hours
-    targetDate.setTime(referenceDate.getTime() + 2 * 60 * 60 * 1000);
-    finalDueDate = targetDate.getTime();
+    // General reminder with no time or day -> +2 hours from now
+    const targetUtcMs = referenceDate.getTime() + 2 * 60 * 60 * 1000;
+    const targetWallClock = new Date(targetUtcMs - offset * 60 * 1000);
+    targetYear = targetWallClock.getUTCFullYear();
+    targetMonth = targetWallClock.getUTCMonth();
+    targetDay = targetWallClock.getUTCDate();
+    finalHours = targetWallClock.getUTCHours();
+    finalMinutes = targetWallClock.getUTCMinutes();
+  }
+
+  let finalDueDate: number | undefined = undefined;
+  let dueDateLocal: string | undefined = undefined;
+
+  if (finalHours !== null) {
+    finalDueDate =
+      Date.UTC(targetYear, targetMonth, targetDay, finalHours, finalMinutes, 0, 0) +
+      offset * 60 * 1000;
+    dueDateLocal = formatToLocalDatetimeString(
+      targetYear,
+      targetMonth,
+      targetDay,
+      finalHours,
+      finalMinutes
+    );
   }
 
   const title = cleanReminderTitle(text);
@@ -391,13 +472,11 @@ export function parseNaturalReminder(
     isReminder,
     title,
     dueDate: finalDueDate,
-    dueDateLocal: finalDueDate ? formatToLocalDatetimeString(new Date(finalDueDate)) : undefined,
+    dueDateLocal,
     recurrenceMode,
     recurrenceDays,
     detectedTime:
-      extractedHours !== null
-        ? { hours: extractedHours, minutes: extractedMinutes || 0 }
-        : undefined,
+      finalHours !== null ? { hours: finalHours, minutes: finalMinutes } : undefined,
   };
 }
 
@@ -415,7 +494,5 @@ function cleanReminderTitle(rawText: string): string {
 
   if (!cleaned) cleaned = rawText.trim() || "Reminder";
 
-  // Capitalize first letter
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
-

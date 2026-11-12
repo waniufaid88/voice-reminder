@@ -201,10 +201,8 @@ export const toggleReminderStatus = mutation({
     // If it's a recurring reminder and currently pending:
     // Completing it for today advances the scheduled dueDate to the next occurrence
     if (isRecurring && item.reminderStatus === "pending" && item.dueDate) {
+      const now = Date.now();
       let nextDueDate = item.dueDate + 24 * 60 * 60 * 1000;
-      const base = new Date(item.dueDate);
-      const hours = base.getHours();
-      const minutes = base.getMinutes();
 
       if (
         item.recurrenceMode === "custom" &&
@@ -212,21 +210,20 @@ export const toggleReminderStatus = mutation({
         item.recurrenceDays.length > 0
       ) {
         const days = item.recurrenceDays;
-        const today = new Date();
-        for (let offset = 1; offset <= 7; offset++) {
-          const candidate = new Date();
-          candidate.setDate(today.getDate() + offset);
-          candidate.setHours(hours, minutes, 0, 0);
-          if (days.includes(candidate.getDay())) {
-            nextDueDate = candidate.getTime();
+        // Advance in 24-hour day increments to preserve the exact local time without server timezone distortion
+        for (let dayOffset = 1; dayOffset <= 7; dayOffset++) {
+          const candidateMs = item.dueDate + dayOffset * 24 * 60 * 60 * 1000;
+          const candidateDayOfWeek = new Date(candidateMs).getDay();
+          if (days.includes(candidateDayOfWeek) && candidateMs > now) {
+            nextDueDate = candidateMs;
             break;
           }
         }
       } else {
-        const nextDay = new Date();
-        nextDay.setDate(nextDay.getDate() + 1);
-        nextDay.setHours(hours, minutes, 0, 0);
-        nextDueDate = nextDay.getTime();
+        // Daily reminder: advance by 24h increments until in the future
+        while (nextDueDate <= now) {
+          nextDueDate += 24 * 60 * 60 * 1000;
+        }
       }
 
       await ctx.db.patch(args.itemId, {

@@ -63,6 +63,7 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
     setProcessingStatus("Structuring note with AI...");
 
     try {
+      const clientTimezoneOffset = new Date().getTimezoneOffset();
       const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const clientNowISO = new Date().toISOString();
       const clientNowLocal = new Date().toString();
@@ -73,6 +74,7 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
         body: JSON.stringify({
           text: values.text,
           clientTimezone,
+          clientTimezoneOffset,
           clientNowISO,
           clientNowLocal,
         }),
@@ -140,6 +142,7 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
         "clientTimezone",
         Intl.DateTimeFormat().resolvedOptions().timeZone
       );
+      formData.append("clientTimezoneOffset", new Date().getTimezoneOffset().toString());
       formData.append("clientNowISO", new Date().toISOString());
       formData.append("clientNowLocal", new Date().toString());
 

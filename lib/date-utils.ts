@@ -19,9 +19,14 @@ export function formatLocalDatetime(timestamp?: number | null): string {
 
 /**
  * Parses a "YYYY-MM-DDTHH:mm" string from <input type="datetime-local" />
- * into an epoch timestamp (ms) in the user's LOCAL timezone.
+ * into an epoch timestamp (ms).
+ * If timezoneOffsetMinutes is provided (e.g. from client new Date().getTimezoneOffset()),
+ * uses Date.UTC to construct the exact timestamp immune to server timezone variation.
  */
-export function parseLocalDatetime(datetimeStr?: string | null): number | undefined {
+export function parseLocalDatetime(
+  datetimeStr?: string | null,
+  timezoneOffsetMinutes?: number
+): number | undefined {
   if (!datetimeStr || !datetimeStr.trim()) return undefined;
 
   const [datePart, timePart] = datetimeStr.trim().split("T");
@@ -38,6 +43,14 @@ export function parseLocalDatetime(datetimeStr?: string | null): number | undefi
     isNaN(minutes)
   ) {
     return undefined;
+  }
+
+  // If timezoneOffsetMinutes is provided, compute using Date.UTC
+  if (timezoneOffsetMinutes !== undefined) {
+    return (
+      Date.UTC(year, month - 1, day, hours, minutes, 0, 0) +
+      timezoneOffsetMinutes * 60 * 1000
+    );
   }
 
   // Construct explicitly in the user's local timezone
@@ -136,44 +149,31 @@ export function formatRecurrenceLabel(
 
 /**
  * Calculates the next recurrence date for daily or custom days recurrence
+ * Uses 24-hour day increments to preserve the exact local time immune to server timezone variance.
  */
 export function calculateNextRecurrence(
   baseDueDateMs: number,
   mode: "daily" | "custom",
   customDays?: number[]
 ): number {
-  const base = new Date(baseDueDateMs);
-  const hours = base.getHours();
-  const minutes = base.getMinutes();
+  const now = Date.now();
 
   if (mode === "daily") {
-    const todayAtTime = new Date();
-    todayAtTime.setHours(hours, minutes, 0, 0);
-
-    if (todayAtTime.getTime() > Date.now()) {
-      return todayAtTime.getTime();
+    let next = baseDueDateMs;
+    while (next <= now) {
+      next += 24 * 60 * 60 * 1000;
     }
-    todayAtTime.setDate(todayAtTime.getDate() + 1);
-    return todayAtTime.getTime();
+    return next;
   }
 
   // Custom days of week
-  const days = customDays && customDays.length > 0 ? customDays : [new Date().getDay()];
-  const today = new Date();
-  const todayDay = today.getDay();
-  const todayTime = new Date();
-  todayTime.setHours(hours, minutes, 0, 0);
-
-  if (days.includes(todayDay) && todayTime.getTime() > Date.now()) {
-    return todayTime.getTime();
-  }
-
+  const days =
+    customDays && customDays.length > 0 ? customDays : [new Date().getDay()];
   for (let offset = 1; offset <= 7; offset++) {
-    const candidate = new Date();
-    candidate.setDate(today.getDate() + offset);
-    candidate.setHours(hours, minutes, 0, 0);
-    if (days.includes(candidate.getDay())) {
-      return candidate.getTime();
+    const candidate = baseDueDateMs + offset * 24 * 60 * 60 * 1000;
+    const candidateDay = new Date(candidate).getDay();
+    if (days.includes(candidateDay) && candidate > now) {
+      return candidate;
     }
   }
 
