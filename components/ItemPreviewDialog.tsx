@@ -138,7 +138,7 @@ export function ItemPreviewDialog({
       });
       setValue("type", itemType, { shouldValidate: true });
     }
-  }, [itemData, reset]);
+  }, [itemData, reset, setValue]);
 
   if (!isOpen || !itemData) return null;
 
@@ -372,9 +372,12 @@ export function ItemPreviewDialog({
                 name="dueDateString"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Due Date & Time</FormLabel>
+                    <FormLabel>Due Date & 12-Hour Time (AM / PM)</FormLabel>
                     <FormControl>
-                      <Input type="datetime-local" {...field} />
+                      <DateTimePicker12h
+                        value={field.value}
+                        onChange={field.onChange}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

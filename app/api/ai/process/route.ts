@@ -102,7 +102,13 @@ export async function POST(req: NextRequest) {
             : audioFile.type.includes("ogg")
             ? "recording.ogg"
             : "recording.webm";
-          whisperFormData.append("file", audioFile, audioExt);
+
+          const arrayBuffer = await audioFile.arrayBuffer();
+          const audioBytes = new Uint8Array(arrayBuffer);
+          const mimeType = audioFile.type || (audioExt === "recording.mp4" ? "audio/mp4" : "audio/webm");
+          const fileToUpload = new File([audioBytes], audioExt, { type: mimeType });
+
+          whisperFormData.append("file", fileToUpload);
           whisperFormData.append("model", "whisper-1");
           whisperFormData.append("response_format", "json");
 

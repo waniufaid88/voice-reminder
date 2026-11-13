@@ -9,6 +9,7 @@ import toast from "react-hot-toast";
 import { api } from "@/convex/_generated/api";
 import { ItemRecord } from "./ItemCard";
 import { RecurrenceSelector } from "./RecurrenceSelector";
+import { DateTimePicker12h } from "./DateTimePicker12h";
 import { formatLocalDatetime, parseLocalDatetime } from "@/lib/date-utils";
 import { parseNaturalReminder } from "@/lib/natural-date-parser";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
@@ -289,9 +290,12 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
                 name="dueDateString"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Due Date & Time</FormLabel>
+                    <FormLabel>Due Date & 12-Hour Time (AM / PM)</FormLabel>
                     <FormControl>
-                      <Input type="datetime-local" {...field} />
+                      <DateTimePicker12h
+                        value={field.value}
+                        onChange={field.onChange}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

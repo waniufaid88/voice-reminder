@@ -105,7 +105,13 @@ export function useVoiceRecorder() {
       analyserRef.current = analyserNode;
       setAnalyser(analyserNode);
 
-      // Setup in-browser Web Speech API transcription (Chrome, Edge, Safari)
+      // On mobile devices (Android / iOS), do NOT run Web Speech API concurrently with getUserMedia/MediaRecorder
+      // because Android's audio layer does not support two simultaneous mic readers and mutes/corrupts the recording.
+      const isMobileDevice =
+        typeof navigator !== "undefined" &&
+        /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+      // Setup in-browser Web Speech API transcription on desktop (Chrome, Edge, Safari)
       const win = window as unknown as {
         SpeechRecognition?: new () => BrowserSpeechRecognition;
         webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
@@ -113,7 +119,7 @@ export function useVoiceRecorder() {
       const SpeechRecognitionClass =
         win.SpeechRecognition || win.webkitSpeechRecognition;
 
-      if (SpeechRecognitionClass) {
+      if (SpeechRecognitionClass && !isMobileDevice) {
         try {
           const recognition = new SpeechRecognitionClass();
           recognition.continuous = true;
@@ -168,6 +174,10 @@ export function useVoiceRecorder() {
           audioChunksRef.current.push(event.data);
         }
       };
+
+      // Set accurate start timestamp right when recording officially starts
+      startTimeRef.current = Date.now();
+      elapsedTimeRef.current = 0;
 
       mediaRecorder.start(250); // collect chunks every 250ms
       setIsRecording(true);
@@ -241,6 +251,13 @@ export function useVoiceRecorder() {
         setIsPaused(false);
         resolve(null);
         return;
+      }
+
+      // Flush final audio buffer before stopping
+      if (mediaRecorderRef.current.state === "recording") {
+        try {
+          mediaRecorderRef.current.requestData();
+        } catch {}
       }
 
       mediaRecorderRef.current.onstop = () => {

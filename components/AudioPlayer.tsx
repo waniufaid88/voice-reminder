@@ -14,24 +14,30 @@ export function AudioPlayer({ src, initialDuration = 0 }: AudioPlayerProps) {
   const [mediaDuration, setMediaDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
 
-  const duration = mediaDuration > 0 ? mediaDuration : initialDuration;
+  // Canonical duration: if initialDuration was provided from the recorder timer, trust it completely
+  const duration = initialDuration > 0 ? initialDuration : mediaDuration;
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     const handleLoadedMetadata = () => {
-      if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        setMediaDuration(audio.duration);
+      // If initialDuration is already known and valid, do not corrupt it with browser hacks
+      if (initialDuration > 0) {
+        return;
+      }
+
+      if (Number.isFinite(audio.duration) && audio.duration > 0 && audio.duration < 3600) {
+        setMediaDuration(Math.round(audio.duration));
       } else if (audio.duration === Infinity) {
-        // Fix for Chromium WebM duration bug
+        // Fallback for Chromium WebM duration bug only when initialDuration is unknown
         audio.currentTime = 1e101;
         audio.ontimeupdate = () => {
           audio.ontimeupdate = null;
-          if (Number.isFinite(audio.duration) && audio.duration > 0) {
-            setMediaDuration(audio.duration);
-          } else if (Number.isFinite(audio.currentTime) && audio.currentTime > 0) {
-            setMediaDuration(audio.currentTime);
+          if (Number.isFinite(audio.duration) && audio.duration > 0 && audio.duration < 3600) {
+            setMediaDuration(Math.round(audio.duration));
+          } else if (Number.isFinite(audio.currentTime) && audio.currentTime > 0 && audio.currentTime < 3600) {
+            setMediaDuration(Math.round(audio.currentTime));
           }
           audio.currentTime = 0;
         };
@@ -40,10 +46,10 @@ export function AudioPlayer({ src, initialDuration = 0 }: AudioPlayerProps) {
 
     const handleTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
-      if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        setMediaDuration(audio.duration);
-      } else if (audio.currentTime > duration) {
-        setMediaDuration(Math.ceil(audio.currentTime));
+      if (duration > 0 && audio.currentTime >= duration) {
+        audio.pause();
+        audio.currentTime = 0;
+        setIsPlaying(false);
       }
     };
 
@@ -61,7 +67,7 @@ export function AudioPlayer({ src, initialDuration = 0 }: AudioPlayerProps) {
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("ended", handleEnded);
     };
-  }, [duration]);
+  }, [duration, initialDuration]);
 
   const togglePlay = () => {
     if (!audioRef.current) return;
