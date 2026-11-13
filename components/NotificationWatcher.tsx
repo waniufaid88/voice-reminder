@@ -130,7 +130,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
   if (!alertingItem) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 max-w-sm rounded-2xl border border-amber-300 bg-amber-50/95 p-4 shadow-2xl backdrop-blur-md dark:border-amber-900/60 dark:bg-amber-950/90 animate-in slide-in-from-bottom-5">
+    <div className="fixed bottom-3 left-3 right-3 sm:left-auto sm:right-6 sm:bottom-6 sm:max-w-sm z-50 rounded-2xl border border-amber-300 bg-amber-50/95 p-4 shadow-2xl backdrop-blur-md dark:border-amber-900/60 dark:bg-amber-950/90 animate-in slide-in-from-bottom-5">
       <div className="flex items-start gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-white shadow-md shadow-amber-500/30 text-xl">
           ⏰

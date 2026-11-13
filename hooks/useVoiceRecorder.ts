@@ -141,14 +141,23 @@ export function useVoiceRecorder() {
         }
       }
 
-      // Select supported audio mime type
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : MediaRecorder.isTypeSupported("audio/mp4")
-        ? "audio/mp4"
-        : "";
+      // Select supported audio mime type safely across desktop and mobile (iOS Safari / Android Chrome)
+      let mimeType = "";
+      try {
+        if (typeof MediaRecorder !== "undefined" && typeof MediaRecorder.isTypeSupported === "function") {
+          if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+            mimeType = "audio/webm;codecs=opus";
+          } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+            mimeType = "audio/webm";
+          } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
+            mimeType = "audio/mp4";
+          } else if (MediaRecorder.isTypeSupported("audio/aac")) {
+            mimeType = "audio/aac";
+          }
+        }
+      } catch {
+        mimeType = "";
+      }
 
       const options = mimeType ? { mimeType } : undefined;
       const mediaRecorder = new MediaRecorder(stream, options);
@@ -164,10 +173,14 @@ export function useVoiceRecorder() {
       setIsRecording(true);
       setIsPaused(false);
 
-      // Duration counter
+      // Duration counter (capped at 300 seconds / 5 minutes max audio size)
       timerRef.current = setInterval(() => {
         const ms = elapsedTimeRef.current + (Date.now() - startTimeRef.current);
-        setDuration(Math.floor(ms / 1000));
+        const secs = Math.floor(ms / 1000);
+        setDuration(secs);
+        if (secs >= 300 && mediaRecorder.state === "recording") {
+          mediaRecorder.stop();
+        }
       }, 250);
     } catch (err: unknown) {
       const isNotAllowed = err instanceof Error && err.name === "NotAllowedError";

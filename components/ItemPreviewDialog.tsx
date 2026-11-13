@@ -33,6 +33,7 @@ export interface StructuredItemData {
   title: string;
   content: string;
   dueDate?: number | null;
+  dueDateLocal?: string;
   isDaily?: boolean;
   recurrenceMode?: "once" | "daily" | "custom";
   recurrenceDays?: number[];
@@ -113,7 +114,8 @@ export function ItemPreviewDialog({
         type: itemData.type || "note",
         title: itemData.title || "Untitled",
         content: cleanContent,
-        dueDateString: formatLocalDatetime(calculatedDueDate),
+        dueDateString:
+          itemData.dueDateLocal || formatLocalDatetime(calculatedDueDate),
         isDaily: calculatedMode === "daily",
         recurrenceMode: calculatedMode,
         recurrenceDays: calculatedDays || [new Date().getDay()],

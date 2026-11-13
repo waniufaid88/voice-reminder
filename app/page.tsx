@@ -267,7 +267,7 @@ export default function DashboardPage() {
       </header>
 
       {/* Main Container */}
-      <main className="mx-auto max-w-5xl px-4 pt-8 sm:px-6 space-y-8">
+      <main className="mx-auto max-w-5xl px-3 sm:px-6 pt-5 sm:pt-8 space-y-6 sm:space-y-8">
         {/* Smart Capture Bar (Mic + Text) */}
         <section className="space-y-2">
           <div className="flex items-center justify-between">
@@ -325,7 +325,7 @@ export default function DashboardPage() {
           <div className="space-y-6">
             {/* Today's Reminders (High Priority at Top) */}
             {todayReminders.length > 0 && (
-              <div className="space-y-3 rounded-2xl border border-amber-200/90 bg-amber-50/50 p-4 shadow-xs dark:border-amber-900/50 dark:bg-amber-950/20">
+              <div className="space-y-3 rounded-2xl border border-amber-200/90 bg-amber-50/50 p-3 sm:p-4 shadow-xs dark:border-amber-900/50 dark:bg-amber-950/20">
                 <div className="flex items-center justify-between border-b border-amber-200/60 pb-2.5 dark:border-amber-900/40">
                   <div className="flex items-center gap-2">
                     <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500 text-white shadow-xs text-sm">

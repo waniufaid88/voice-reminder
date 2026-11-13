@@ -64,6 +64,8 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
 
   const [isSnoozeOpen, setIsSnoozeOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isContentExpanded, setIsContentExpanded] = useState(false);
+  const [isListExpanded, setIsListExpanded] = useState(false);
   const [now, setNow] = useState(0);
 
   useEffect(() => {
@@ -347,9 +349,9 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
         )}
 
         {/* Checklist Body if type === 'list' */}
-        {item.type === "list" && item.checklist && (
+        {item.type === "list" && item.checklist && item.checklist.length > 0 && (
           <div className="mt-3 space-y-1.5">
-            {item.checklist.map((ci) => (
+            {(isListExpanded ? item.checklist : item.checklist.slice(0, 3)).map((ci) => (
               <label
                 key={ci.id}
                 className="flex items-start gap-2.5 cursor-pointer select-none rounded-lg p-1 hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
@@ -365,7 +367,7 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
                   className="mt-0.5"
                 />
                 <span
-                  className={`text-xs text-zinc-800 dark:text-zinc-200 ${ci.completed
+                  className={`text-xs text-zinc-800 dark:text-zinc-200 break-words ${ci.completed
                     ? "line-through text-zinc-400 dark:text-zinc-500"
                     : ""
                     }`}
@@ -374,14 +376,54 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
                 </span>
               </label>
             ))}
+
+            {item.checklist.length > 3 && (
+              <div className="pt-0.5">
+                {!isListExpanded ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsListExpanded(true)}
+                    className="flex w-full items-center justify-between rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 cursor-pointer transition-colors"
+                  >
+                    <span className="font-medium">... ({item.checklist.length - 3} more items)</span>
+                    <span className="font-semibold text-indigo-600 dark:text-indigo-400">Show more... ↓</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsListExpanded(false)}
+                    className="mt-1 inline-flex items-center text-[11px] font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 cursor-pointer px-1"
+                  >
+                    Show less ↑
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Note / Text Content */}
+        {/* Note / Text Content with Ellipsis for large text */}
         {item.content && (
-          <p className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">
-            {item.content}
-          </p>
+          <div className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+            <p
+              className={
+                isContentExpanded
+                  ? "whitespace-pre-wrap break-words"
+                  : "line-clamp-3 whitespace-pre-wrap break-words"
+              }
+            >
+              {item.content}
+            </p>
+            {item.content.length > 140 && (
+              <button
+                type="button"
+                onClick={() => setIsContentExpanded(!isContentExpanded)}
+                className="mt-1 inline-flex items-center text-[11px] font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 cursor-pointer"
+              >
+                {isContentExpanded ? "Show less ↑" : "Show more... ↓"}
+              </button>
+            )}
+          </div>
         )}
 
         {/* Audio Player & Duration */}

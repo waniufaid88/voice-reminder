@@ -10,10 +10,19 @@ import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { WaveformVisualizer } from "./WaveformVisualizer";
 import { ItemPreviewDialog, StructuredItemData } from "./ItemPreviewDialog";
 import { Button } from "@/components/ui/button";
-import { parseNaturalReminder } from "@/lib/natural-date-parser";
+import {
+  parseNaturalReminder,
+  cleanReminderContent,
+  generateSmartListInfo,
+  generateSmartNoteInfo,
+} from "@/lib/natural-date-parser";
 
 const captureSchema = z.object({
-  text: z.string().trim().min(1, "Please type a note, reminder, or task"),
+  text: z
+    .string()
+    .trim()
+    .min(1, "Please type a note, reminder, or task")
+    .max(1000, "Text cannot exceed 1000 characters"),
 });
 
 type CaptureFormValues = z.infer<typeof captureSchema>;
@@ -82,34 +91,83 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
 
       const data = await res.json();
       if (!res.ok) {
-        const natural = parseNaturalReminder(values.text, new Date());
-        setPreviewData({
-          type: natural.isReminder ? "reminder" : "note",
-          title: natural.title || values.text.slice(0, 30) || "New Note",
-          content: values.text,
-          dueDate: natural.dueDate,
-          recurrenceMode: natural.recurrenceMode || "once",
-          recurrenceDays: natural.recurrenceDays,
-          isDaily: natural.recurrenceMode === "daily",
-          tags: natural.isReminder ? ["#reminder"] : ["#note"],
-        });
+        const natural = parseNaturalReminder(values.text, new Date(), clientTimezoneOffset);
+        if (natural.isReminder) {
+          setPreviewData({
+            type: "reminder",
+            title: natural.title,
+            content: cleanReminderContent(values.text),
+            dueDate: natural.dueDate,
+            dueDateLocal: natural.dueDateLocal,
+            recurrenceMode: natural.recurrenceMode || "once",
+            recurrenceDays: natural.recurrenceDays,
+            isDaily: natural.recurrenceMode === "daily",
+            tags: ["#reminder"],
+          });
+        } else if (
+          values.text.toLowerCase().includes("buy ") ||
+          values.text.toLowerCase().includes("list") ||
+          values.text.includes(",")
+        ) {
+          const listInfo = generateSmartListInfo(values.text);
+          setPreviewData({
+            type: "list",
+            title: listInfo.title,
+            content: listInfo.content,
+            checklist: listInfo.checklist,
+            tags: ["#list"],
+          });
+        } else {
+          const noteInfo = generateSmartNoteInfo(values.text);
+          setPreviewData({
+            type: "note",
+            title: noteInfo.title,
+            content: noteInfo.content,
+            tags: ["#note"],
+          });
+        }
       } else {
         setPreviewData(data);
       }
       setIsPreviewOpen(true);
       reset();
     } catch {
-      const natural = parseNaturalReminder(values.text, new Date());
-      setPreviewData({
-        type: natural.isReminder ? "reminder" : "note",
-        title: natural.title || values.text.slice(0, 30) || "New Note",
-        content: values.text,
-        dueDate: natural.dueDate,
-        recurrenceMode: natural.recurrenceMode || "once",
-        recurrenceDays: natural.recurrenceDays,
-        isDaily: natural.recurrenceMode === "daily",
-        tags: natural.isReminder ? ["#reminder"] : ["#note"],
-      });
+      const offset = new Date().getTimezoneOffset();
+      const natural = parseNaturalReminder(values.text, new Date(), offset);
+      if (natural.isReminder) {
+        setPreviewData({
+          type: "reminder",
+          title: natural.title,
+          content: cleanReminderContent(values.text),
+          dueDate: natural.dueDate,
+          dueDateLocal: natural.dueDateLocal,
+          recurrenceMode: natural.recurrenceMode || "once",
+          recurrenceDays: natural.recurrenceDays,
+          isDaily: natural.recurrenceMode === "daily",
+          tags: ["#reminder"],
+        });
+      } else if (
+        values.text.toLowerCase().includes("buy ") ||
+        values.text.toLowerCase().includes("list") ||
+        values.text.includes(",")
+      ) {
+        const listInfo = generateSmartListInfo(values.text);
+        setPreviewData({
+          type: "list",
+          title: listInfo.title,
+          content: listInfo.content,
+          checklist: listInfo.checklist,
+          tags: ["#list"],
+        });
+      } else {
+        const noteInfo = generateSmartNoteInfo(values.text);
+        setPreviewData({
+          type: "note",
+          title: noteInfo.title,
+          content: noteInfo.content,
+          tags: ["#note"],
+        });
+      }
       setIsPreviewOpen(true);
       reset();
     } finally {
@@ -134,9 +192,30 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       return;
     }
 
+    // Audio size and duration validations
+    if (result.duration < 1) {
+      setIsProcessing(false);
+      setProcessingStatus("");
+      toast.error("Recording is too short (minimum 1 second). Please speak clearly.");
+      return;
+    }
+
+    if (result.blob.size > 15 * 1024 * 1024) {
+      setIsProcessing(false);
+      setProcessingStatus("");
+      toast.error("Audio recording exceeds 15MB size limit.");
+      return;
+    }
+
     try {
       const formData = new FormData();
-      formData.append("audio", result.blob, "voice-note.webm");
+      const filename =
+        result.blob.type.includes("mp4") || result.blob.type.includes("m4a")
+          ? "voice-note.mp4"
+          : result.blob.type.includes("ogg")
+          ? "voice-note.ogg"
+          : "voice-note.webm";
+      formData.append("audio", result.blob, filename);
       formData.append("fallbackText", result.browserTranscript || "");
       formData.append(
         "clientTimezone",
@@ -154,27 +233,53 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       const data = await res.json();
       if (!res.ok) {
         toast("Saved voice recording.", { icon: "🎙️" });
-        const natural = parseNaturalReminder(
-          result.browserTranscript || "",
-          new Date()
-        );
-        setPreviewData({
-          type: natural.isReminder ? "reminder" : "note",
-          title:
-            natural.title ||
-            (result.browserTranscript
-              ? result.browserTranscript.slice(0, 30)
-              : `Voice Note (${result.duration}s)`),
-          content: result.browserTranscript || "Voice note recorded.",
-          dueDate: natural.dueDate,
-          recurrenceMode: natural.recurrenceMode || "once",
-          recurrenceDays: natural.recurrenceDays,
-          isDaily: natural.recurrenceMode === "daily",
-          audioBlob: result.blob,
-          audioDuration: result.duration,
-          audioPreviewUrl: result.url,
-          tags: natural.isReminder ? ["#reminder", "#voice"] : ["#voice"],
-        });
+        const text = result.browserTranscript || "";
+        const offset = new Date().getTimezoneOffset();
+        const natural = parseNaturalReminder(text, new Date(), offset);
+
+        if (natural.isReminder) {
+          setPreviewData({
+            type: "reminder",
+            title: natural.title,
+            content: cleanReminderContent(text) || `Voice Reminder (${result.duration}s)`,
+            dueDate: natural.dueDate,
+            dueDateLocal: natural.dueDateLocal,
+            recurrenceMode: natural.recurrenceMode || "once",
+            recurrenceDays: natural.recurrenceDays,
+            isDaily: natural.recurrenceMode === "daily",
+            audioBlob: result.blob,
+            audioDuration: result.duration,
+            audioPreviewUrl: result.url,
+            tags: ["#reminder", "#voice"],
+          });
+        } else if (
+          text.toLowerCase().includes("buy ") ||
+          text.toLowerCase().includes("list") ||
+          text.includes(",")
+        ) {
+          const listInfo = generateSmartListInfo(text);
+          setPreviewData({
+            type: "list",
+            title: listInfo.title,
+            content: listInfo.content,
+            checklist: listInfo.checklist,
+            audioBlob: result.blob,
+            audioDuration: result.duration,
+            audioPreviewUrl: result.url,
+            tags: ["#list", "#voice"],
+          });
+        } else {
+          const noteInfo = generateSmartNoteInfo(text || `Voice Note ${result.duration}s`);
+          setPreviewData({
+            type: "note",
+            title: noteInfo.title,
+            content: noteInfo.content,
+            audioBlob: result.blob,
+            audioDuration: result.duration,
+            audioPreviewUrl: result.url,
+            tags: ["#note", "#voice"],
+          });
+        }
       } else {
         if (data.isQuotaExhausted) {
           toast(
@@ -193,27 +298,53 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       }
       setIsPreviewOpen(true);
     } catch {
-      const natural = parseNaturalReminder(
-        result.browserTranscript || "",
-        new Date()
-      );
-      setPreviewData({
-        type: natural.isReminder ? "reminder" : "note",
-        title:
-          natural.title ||
-          (result.browserTranscript
-            ? result.browserTranscript.slice(0, 30)
-            : "Voice Recording"),
-        content: result.browserTranscript || "Recorded voice note.",
-        dueDate: natural.dueDate,
-        recurrenceMode: natural.recurrenceMode || "once",
-        recurrenceDays: natural.recurrenceDays,
-        isDaily: natural.recurrenceMode === "daily",
-        audioBlob: result.blob,
-        audioDuration: result.duration,
-        audioPreviewUrl: result.url,
-        tags: natural.isReminder ? ["#reminder", "#voice"] : ["#voice"],
-      });
+      const text = result.browserTranscript || "";
+      const offset = new Date().getTimezoneOffset();
+      const natural = parseNaturalReminder(text, new Date(), offset);
+
+      if (natural.isReminder) {
+        setPreviewData({
+          type: "reminder",
+          title: natural.title,
+          content: cleanReminderContent(text) || `Voice Reminder (${result.duration}s)`,
+          dueDate: natural.dueDate,
+          dueDateLocal: natural.dueDateLocal,
+          recurrenceMode: natural.recurrenceMode || "once",
+          recurrenceDays: natural.recurrenceDays,
+          isDaily: natural.recurrenceMode === "daily",
+          audioBlob: result.blob,
+          audioDuration: result.duration,
+          audioPreviewUrl: result.url,
+          tags: ["#reminder", "#voice"],
+        });
+      } else if (
+        text.toLowerCase().includes("buy ") ||
+        text.toLowerCase().includes("list") ||
+        text.includes(",")
+      ) {
+        const listInfo = generateSmartListInfo(text);
+        setPreviewData({
+          type: "list",
+          title: listInfo.title,
+          content: listInfo.content,
+          checklist: listInfo.checklist,
+          audioBlob: result.blob,
+          audioDuration: result.duration,
+          audioPreviewUrl: result.url,
+          tags: ["#list", "#voice"],
+        });
+      } else {
+        const noteInfo = generateSmartNoteInfo(text || `Voice Note ${result.duration}s`);
+        setPreviewData({
+          type: "note",
+          title: noteInfo.title,
+          content: noteInfo.content,
+          audioBlob: result.blob,
+          audioDuration: result.duration,
+          audioPreviewUrl: result.url,
+          tags: ["#note", "#voice"],
+        });
+      }
       setIsPreviewOpen(true);
     } finally {
       setIsProcessing(false);
@@ -249,39 +380,54 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
 
         {/* Recording Active Tray */}
         {isRecording ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-indigo-500/50 bg-white p-3.5 shadow-lg shadow-indigo-500/10 dark:border-indigo-500/30 dark:bg-zinc-900">
-            <div className="flex items-center gap-3">
-              <span className="relative flex h-3.5 w-3.5">
-                {!isPaused && (
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
-                )}
-                <span
-                  className={`relative inline-flex h-3.5 w-3.5 rounded-full ${
-                    isPaused ? "bg-amber-500" : "bg-rose-500"
-                  }`}
-                />
-              </span>
-              <span className="font-mono text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-                {formattedTime}
-              </span>
-              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                {isPaused ? "Paused" : "Recording..."}
-              </span>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border-2 border-indigo-500/50 bg-white p-3 sm:p-3.5 shadow-lg shadow-indigo-500/10 dark:border-indigo-500/30 dark:bg-zinc-900">
+            <div className="flex items-center justify-between sm:justify-start gap-3 w-full sm:w-auto">
+              <div className="flex items-center gap-2.5">
+                <span className="relative flex h-3 w-3 sm:h-3.5 sm:w-3.5">
+                  {!isPaused && (
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
+                  )}
+                  <span
+                    className={`relative inline-flex h-3 w-3 sm:h-3.5 sm:w-3.5 rounded-full ${
+                      isPaused ? "bg-amber-500" : "bg-rose-500"
+                    }`}
+                  />
+                </span>
+                <span className="font-mono text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  {formattedTime}
+                </span>
+                <span className="text-[11px] sm:text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  {isPaused ? "Paused" : "Recording..."}
+                </span>
+              </div>
+
+              {/* Cancel on mobile top-right */}
+              <button
+                type="button"
+                onClick={handleCancelRecording}
+                className="sm:hidden rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
+                title="Discard recording"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
 
             {/* Live Waveform Visualizer */}
-            <div className="flex-1 max-w-xs flex justify-center">
+            <div className="w-full sm:flex-1 sm:max-w-xs flex justify-center py-0.5 sm:py-0">
               <WaveformVisualizer analyser={analyser} isPaused={isPaused} />
             </div>
 
             {/* Control buttons */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-end gap-2 w-full sm:w-auto">
               {/* Pause / Resume */}
               {isPaused ? (
                 <Button
                   type="button"
                   variant="secondary"
                   size="sm"
+                  className="flex-1 sm:flex-none h-9 text-xs"
                   onClick={resumeRecording}
                 >
                   ▶ Resume
@@ -291,6 +437,7 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
                   type="button"
                   variant="secondary"
                   size="sm"
+                  className="flex-1 sm:flex-none h-9 text-xs"
                   onClick={pauseRecording}
                 >
                   ⏸ Pause
@@ -303,16 +450,16 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
                 size="sm"
                 onClick={handleStopAndProcess}
                 disabled={isProcessing}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white"
+                className="flex-1 sm:flex-none h-9 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
               >
                 <span>⏹</span> Done
               </Button>
 
-              {/* Cancel */}
+              {/* Cancel desktop */}
               <button
                 type="button"
                 onClick={handleCancelRecording}
-                className="rounded-xl p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
+                className="hidden sm:block rounded-xl p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
                 title="Discard recording"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

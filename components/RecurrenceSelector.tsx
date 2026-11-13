@@ -36,11 +36,11 @@ export function RecurrenceSelector({
         </p>
 
         {/* 3 Frequency Options */}
-        <div className="grid grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-3 gap-1 sm:gap-1.5">
           <button
             type="button"
             onClick={() => onChangeMode("once")}
-            className={`rounded-xl px-2 py-2 text-xs font-semibold transition-all border cursor-pointer ${
+            className={`rounded-xl px-1.5 sm:px-2 py-2 text-[11px] sm:text-xs font-semibold transition-all border cursor-pointer ${
               mode === "once"
                 ? "bg-amber-600 text-white border-amber-600 shadow-xs"
                 : "bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
@@ -51,7 +51,7 @@ export function RecurrenceSelector({
           <button
             type="button"
             onClick={() => onChangeMode("daily")}
-            className={`rounded-xl px-2 py-2 text-xs font-semibold transition-all border cursor-pointer ${
+            className={`rounded-xl px-1.5 sm:px-2 py-2 text-[11px] sm:text-xs font-semibold transition-all border cursor-pointer ${
               mode === "daily"
                 ? "bg-amber-600 text-white border-amber-600 shadow-xs"
                 : "bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
@@ -67,13 +67,13 @@ export function RecurrenceSelector({
                 onChangeDays([new Date().getDay()]);
               }
             }}
-            className={`rounded-xl px-2 py-2 text-xs font-semibold transition-all border cursor-pointer ${
+            className={`rounded-xl px-1.5 sm:px-2 py-2 text-[11px] sm:text-xs font-semibold transition-all border cursor-pointer ${
               mode === "custom"
                 ? "bg-amber-600 text-white border-amber-600 shadow-xs"
                 : "bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
             }`}
           >
-            📅 Custom Days
+            📅 Days
           </button>
         </div>
       </div>
@@ -84,7 +84,7 @@ export function RecurrenceSelector({
           <label className="block text-[11px] font-semibold text-amber-900 dark:text-amber-200">
             Select days to remind:
           </label>
-          <div className="grid grid-cols-7 gap-1">
+          <div className="grid grid-cols-7 gap-0.5 sm:gap-1">
             {DAY_NAMES_SHORT.map((name, index) => {
               const isSelected = selectedDays.includes(index);
               return (
@@ -92,7 +92,7 @@ export function RecurrenceSelector({
                   key={name}
                   type="button"
                   onClick={() => toggleDay(index)}
-                  className={`flex items-center justify-center h-9 sm:h-10 rounded-xl text-[11px] sm:text-xs font-bold transition-all border cursor-pointer ${
+                  className={`flex items-center justify-center h-8 sm:h-10 rounded-xl text-[10px] sm:text-xs font-bold transition-all border cursor-pointer ${
                     isSelected
                       ? "bg-amber-500 text-white border-amber-500 shadow-xs"
                       : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300"

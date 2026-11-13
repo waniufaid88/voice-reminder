@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { parseNaturalReminder } from "@/lib/natural-date-parser";
+import {
+  parseNaturalReminder,
+  cleanReminderContent,
+  generateSmartListInfo,
+  generateSmartNoteInfo,
+} from "@/lib/natural-date-parser";
 import { parseLocalDatetime } from "@/lib/date-utils";
 
 // Intelligent rule-based extractor with full natural date, time, and recurrence support
@@ -14,7 +19,7 @@ function parseTextRuleBased(
     return {
       type: "reminder" as const,
       title: natural.title,
-      content: rawText,
+      content: cleanReminderContent(rawText),
       dueDate: natural.dueDate,
       dueDateLocal: natural.dueDateLocal,
       recurrenceMode: natural.recurrenceMode || "once",
@@ -29,9 +34,6 @@ function parseTextRuleBased(
   }
 
   const lower = rawText.toLowerCase().trim();
-  const words = rawText.trim().split(/\s+/);
-  const title = words.slice(0, 6).join(" ") || "Note";
-
   const isList =
     lower.includes("buy ") ||
     lower.includes("list") ||
@@ -42,36 +44,23 @@ function parseTextRuleBased(
     rawText.includes(" and ");
 
   if (isList) {
-    const rawItems = rawText
-      .replace(/^.*(?:buy|list|get)\s+/i, "")
-      .split(/,|\band\b|\n/i)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-
-    const checklist =
-      rawItems.length > 0
-        ? rawItems.map((text, idx) => ({
-            id: (idx + 1).toString(),
-            text: text.charAt(0).toUpperCase() + text.slice(1),
-            completed: false,
-          }))
-        : [{ id: "1", text: rawText, completed: false }];
-
+    const listInfo = generateSmartListInfo(rawText);
     return {
       type: "list" as const,
-      title: title.charAt(0).toUpperCase() + title.slice(1),
-      content: rawText,
+      title: listInfo.title,
+      content: listInfo.content,
       dueDate: undefined,
-      checklist,
+      checklist: listInfo.checklist,
       tags: ["#list", "#shopping"],
     };
   }
 
   // Default to Note
+  const noteInfo = generateSmartNoteInfo(rawText);
   return {
     type: "note" as const,
-    title: title.charAt(0).toUpperCase() + title.slice(1),
-    content: rawText,
+    title: noteInfo.title,
+    content: noteInfo.content,
     dueDate: undefined,
     checklist: undefined,
     tags: ["#note", "#voice"],
@@ -108,7 +97,12 @@ export async function POST(req: NextRequest) {
         // Step 1: Send audio to OpenAI Whisper API
         try {
           const whisperFormData = new FormData();
-          whisperFormData.append("file", audioFile, "recording.webm");
+          const audioExt = audioFile.type.includes("mp4") || audioFile.type.includes("m4a")
+            ? "recording.mp4"
+            : audioFile.type.includes("ogg")
+            ? "recording.ogg"
+            : "recording.webm";
+          whisperFormData.append("file", audioFile, audioExt);
           whisperFormData.append("model", "whisper-1");
           whisperFormData.append("response_format", "json");
 
@@ -222,7 +216,42 @@ CRITICAL USER TIMEZONE CONTEXT:
 - Today in user's timezone is: ${todayDayName}, ${todayDateStr}
 - Tomorrow in user's timezone is: ${tomorrowDayName}, ${tomorrowDateStr}
 
-Rules for reminders:
+CRITICAL TITLE AND CONTENT RULES (MANDATORY):
+The title and content MUST be completely different. Never use the complete original user sentence as the title.
+
+1. NOTES:
+- Generate a short, meaningful title (2-5 words) summarizing the main subject (e.g. "Project Discussion", "App Architecture", "Book Recommendation").
+- Content should contain the complete note with its important details in well-written prose.
+Example:
+Input: "Today I discussed the new project with my team. We decided to finish it by Friday."
+Title: "Project Discussion"
+Content: "Discussed the new project with the team. The agreed deadline is Friday."
+
+2. REMINDERS:
+- Generate a short, actionable title (2-5 words).
+- Do NOT include unnecessary phrases like "I have to", "I need to", "I must", or "Remind me".
+- Never put the date/time inside the title if the title already explains the action (e.g. use "Call John", not "Call John Tomorrow at 5 PM").
+- Content should clearly explain what the user needs to do, preserving all important details and deadlines.
+Example:
+Input: "I have to call John tomorrow at 5 PM."
+Title: "Call John"
+Content: "Call John tomorrow at 5:00 PM."
+
+3. LISTS:
+- Generate a meaningful title describing the list (e.g. "Grocery Shopping", "Packing Checklist", "Weekly Tasks").
+- Content should briefly describe the purpose of the list (e.g. "Shopping items to purchase.").
+- Put individual items inside the checklist array (e.g. "Milk", "Bread", "Eggs").
+- NEVER duplicate checklist items inside the title.
+Example:
+Input: "Buy milk, bread and eggs."
+Title: "Grocery Shopping"
+Content: "Shopping items to purchase."
+Checklist:
+- Milk
+- Bread
+- Eggs
+
+Rules for reminder scheduling:
 - You MUST extract the EXACT time and day specified by the user (e.g. "4:30 pm" -> 16:30, "at 10 am" -> 10:00, "tomorrow at 5 pm" -> tomorrow at 17:00, "on Friday at 2 pm" -> upcoming Friday at 14:00).
 - If only a time is mentioned (e.g. "at 5 pm"): if that time today is in the future in the user's timezone, set for today; if that time has already passed today, set for tomorrow.
 - Output "dueDateLocal" formatted strictly as "YYYY-MM-DDTHH:mm" (24-hour format in USER'S local time).
@@ -236,8 +265,8 @@ Rules for reminders:
 Respond ONLY with valid JSON with this exact structure:
 {
   "type": "note" | "reminder" | "list",
-  "title": "Short descriptive title (3-6 words)",
-  "content": "Cleaned up, well-punctuated transcript or summary",
+  "title": "Short descriptive title (2-5 words)",
+  "content": "Detailed, well-punctuated transcript or summary (different from title)",
   "dueDateLocal": "YYYY-MM-DDTHH:mm" or null,
   "recurrenceMode": "once" | "daily" | "custom",
   "recurrenceDays": [1, 3] or null,
@@ -287,13 +316,43 @@ Respond ONLY with valid JSON with this exact structure:
           const recurrenceDays =
             parsed.recurrenceDays || natural.recurrenceDays;
 
+          const finalType = parsed.type || (natural.isReminder ? "reminder" : "note");
+          let finalTitle = parsed.title?.trim() || "";
+          let finalContent = parsed.content?.trim() || "";
+
+          // Ensure title and content are strictly distinct and title is concise
+          if (
+            !finalTitle ||
+            finalTitle.toLowerCase() === finalContent.toLowerCase() ||
+            finalTitle.split(/\s+/).length > 6
+          ) {
+            if (finalType === "reminder") {
+              finalTitle = natural.title;
+              if (!finalContent || finalContent.toLowerCase() === finalTitle.toLowerCase()) {
+                finalContent = cleanReminderContent(rawText);
+              }
+            } else if (finalType === "list") {
+              const listInfo = generateSmartListInfo(rawText);
+              finalTitle = listInfo.title;
+              if (!finalContent || finalContent.toLowerCase() === finalTitle.toLowerCase()) {
+                finalContent = listInfo.content;
+              }
+            } else {
+              const noteInfo = generateSmartNoteInfo(rawText);
+              finalTitle = noteInfo.title;
+              if (!finalContent || finalContent.toLowerCase() === finalTitle.toLowerCase()) {
+                finalContent = noteInfo.content;
+              }
+            }
+          }
+
           return NextResponse.json({
             success: true,
             usedOpenAI: true,
             rawTranscript: rawText,
-            type: parsed.type || (natural.isReminder ? "reminder" : "note"),
-            title: parsed.title || natural.title,
-            content: parsed.content || rawText,
+            type: finalType,
+            title: finalTitle,
+            content: finalContent || rawText,
             dueDate: finalDueDate,
             dueDateLocal,
             recurrenceMode,

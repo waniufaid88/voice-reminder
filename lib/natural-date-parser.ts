@@ -481,18 +481,160 @@ export function parseNaturalReminder(
 }
 
 /**
- * Cleans the raw user text into a concise title by removing reminder prefixes.
+ * Generates a short, actionable title (2-5 words) from a reminder sentence.
+ * Strips "I have to", "I need to", "Remind me to", etc., and removes date/time suffixes.
+ * Example: "I have to call John tomorrow at 5 PM." -> "Call John"
  */
-function cleanReminderTitle(rawText: string): string {
-  let cleaned = rawText
-    .replace(/^remind\s+me\s+(?:to\s+|about\s+|that\s+)?/i, "")
-    .replace(/^please\s+remind\s+me\s+(?:to\s+|about\s+|that\s+)?/i, "")
+export function cleanReminderTitle(rawText: string): string {
+  let cleaned = rawText.trim();
+
+  // Strip prefixes
+  cleaned = cleaned
+    .replace(/^(?:i\s+have\s+to|i\s+need\s+to|i\s+must|i\s+should)\s+/i, "")
+    .replace(/^(?:please\s+)?remind\s+me\s+(?:to\s+|about\s+|that\s+)?/i, "")
     .replace(/^set\s+a\s+reminder\s+(?:for\s+|to\s+)?/i, "")
     .replace(/^reminder\s*:\s*/i, "")
     .replace(/^create\s+a\s+reminder\s+(?:for\s+|to\s+)?/i, "")
+    .replace(/^schedule\s+(?:a\s+)?(?:meeting\s+with\s+|appointment\s+with\s+)?/i, "")
     .trim();
 
-  if (!cleaned) cleaned = rawText.trim() || "Reminder";
+  // Strip date & time suffixes from the title so title is a concise action (e.g. "Call John")
+  cleaned = cleaned
+    .replace(/\s+(?:tomorrow|today|tonight)(?:\s+at\s+.*)?$/i, "")
+    .replace(/\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?.*$/i, "")
+    .replace(/\s+(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+.*)?$/i, "")
+    .replace(/\s+in\s+\d+\s*(?:minute|min|hour|hr|day)s?.*$/i, "")
+    .replace(/\s+daily(?:\s+at\s+.*)?$/i, "")
+    .replace(/\s+every\s+day(?:\s+at\s+.*)?$/i, "")
+    .trim();
+
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (words.length > 5) {
+    cleaned = words.slice(0, 4).join(" ");
+  }
+
+  if (!cleaned) cleaned = "Reminder";
+
+  return cleaned
+    .split(" ")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/**
+ * Cleans the content of a reminder to clearly state what the user needs to do,
+ * preserving all important details and deadlines.
+ * Example: "I have to call John tomorrow at 5 PM." -> "Call John tomorrow at 5:00 PM."
+ */
+export function cleanReminderContent(rawText: string): string {
+  let cleaned = rawText.trim();
+  cleaned = cleaned
+    .replace(/^(?:i\s+have\s+to|i\s+need\s+to|i\s+must)\s+/i, "")
+    .replace(/^(?:please\s+)?remind\s+me\s+(?:to\s+|about\s+|that\s+)?/i, "")
+    .replace(/^set\s+a\s+reminder\s+(?:for\s+|to\s+)?/i, "")
+    .replace(/^reminder\s*:\s*/i, "")
+    .trim();
+
+  if (!cleaned) cleaned = rawText.trim();
 
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/**
+ * Generates a distinct title and content for checklist/lists.
+ * Never duplicates items in title.
+ * Example: "Buy milk, bread and eggs" -> Title: "Grocery Shopping", Content: "Shopping items to purchase."
+ */
+export function generateSmartListInfo(rawText: string): {
+  title: string;
+  content: string;
+  checklist: Array<{ id: string; text: string; completed: boolean }>;
+} {
+  const lower = rawText.toLowerCase();
+
+  const itemStr = rawText
+    .replace(/^(?:i\s+need\s+to\s+buy|buy|get|purchase|list\s+of|shopping\s+for|todo\s+list\s+for)\s+/i, "")
+    .trim();
+
+  const items = itemStr
+    .split(/,|\band\b|\n/i)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && !/^(?:and|also|item)$/i.test(s));
+
+  let title = "Checklist";
+  let content = "Checklist of items.";
+
+  if (
+    lower.includes("milk") ||
+    lower.includes("bread") ||
+    lower.includes("egg") ||
+    lower.includes("grocery") ||
+    lower.includes("groceries") ||
+    lower.includes("fruit") ||
+    lower.includes("vegetable") ||
+    lower.includes("buy ") ||
+    lower.includes("supermarket")
+  ) {
+    title = "Grocery Shopping";
+    content = "Shopping items to purchase.";
+  } else if (
+    lower.includes("pack") ||
+    lower.includes("luggage") ||
+    lower.includes("trip") ||
+    lower.includes("travel")
+  ) {
+    title = "Packing List";
+    content = "Items to pack for the trip.";
+  } else if (lower.includes("todo") || lower.includes("task") || lower.includes("work")) {
+    title = "To-Do List";
+    content = "Tasks to complete.";
+  } else {
+    title = "Shopping List";
+    content = "Items to get.";
+  }
+
+  const checklist =
+    items.length > 0
+      ? items.map((text, idx) => ({
+          id: (idx + 1).toString(),
+          text: text.charAt(0).toUpperCase() + text.slice(1),
+          completed: false,
+        }))
+      : [{ id: "1", text: rawText, completed: false }];
+
+  return { title, content, checklist };
+}
+
+/**
+ * Generates a short, meaningful title (2-5 words) summarizing note subject,
+ * with complete details in content.
+ */
+export function generateSmartNoteInfo(rawText: string): {
+  title: string;
+  content: string;
+} {
+  const trimmed = rawText.trim();
+  const lower = trimmed.toLowerCase();
+
+  const cleanedSubject = trimmed
+    .replace(/^(?:today\s+i\s+discussed|i\s+discussed|we\s+discussed|discussion\s+about)\s+/i, "")
+    .replace(/^(?:i\s+was\s+thinking\s+about|thought\s+about|idea\s+about|note\s+about)\s+/i, "")
+    .replace(/^(?:today\s+|yesterday\s+|meeting\s+about\s+|note\s*:\s*)/i, "")
+    .trim();
+
+  const words = cleanedSubject.split(/\s+/).filter(Boolean);
+  let title = "General Note";
+
+  if (words.length >= 2) {
+    title = words.slice(0, 3).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  } else if (words.length === 1) {
+    title = words[0].charAt(0).toUpperCase() + words[0].slice(1) + " Note";
+  }
+
+  let content = trimmed;
+  if (lower.startsWith("today i discussed ")) {
+    content = "Discussed " + trimmed.slice(18);
+  }
+
+  return { title, content };
 }
