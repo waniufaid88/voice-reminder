@@ -81,8 +81,13 @@ export function parseNaturalReminder(
   referenceDate: Date = new Date(),
   clientTimezoneOffset?: number
 ): ParsedNaturalReminder {
-  const text = rawText.trim();
-  const lower = text.toLowerCase();
+  // Normalize input string: handle "p.m.", "a.m.", "p.m", "a.m", periods in times
+  const normalizedText = rawText
+    .replace(/\bp\.m\.?/gi, "pm")
+    .replace(/\ba\.m\.?/gi, "am")
+    .replace(/(\d{1,2})\s*\.\s*(\d{2})\s*(am|pm)/gi, "$1:$2 $3")
+    .trim();
+  const lower = normalizedText.toLowerCase();
 
   // Resolve timezone offset in minutes (e.g. -330 for IST UTC+5:30)
   const offset =
@@ -127,11 +132,11 @@ export function parseNaturalReminder(
 
   const hasReminderKeyword = reminderKeywords.some((kw) => lower.includes(kw));
 
-  // Time pattern check (e.g. 5pm, 4:30 pm, at 10)
+  // Time pattern check (e.g. 5pm, 4:30 pm, 3:00 p.m., at 10)
   const hasTimePattern =
-    /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.test(text) ||
-    /\bat\s+\d{1,2}(?::\d{2})?\b/i.test(text) ||
-    /\bin\s+\d+\s*(?:minute|min|hour|hr|day)s?\b/i.test(text);
+    /\b\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.?|p\.m\.?)\b/i.test(rawText) ||
+    /\bat\s+\d{1,2}(?::\d{2})?\b/i.test(rawText) ||
+    /\bin\s+\d+\s*(?:minute|min|hour|hr|day)s?\b/i.test(rawText);
 
   const isReminder = hasReminderKeyword || hasTimePattern;
 
@@ -207,7 +212,7 @@ export function parseNaturalReminder(
       targetM
     );
 
-    const title = cleanReminderTitle(text);
+    const title = cleanReminderTitle(rawText);
     return {
       isReminder: true,
       title,
@@ -221,12 +226,12 @@ export function parseNaturalReminder(
 
   // Case 3b: "HH:MM am/pm" or "H:MM am/pm" or "H.MM am/pm"
   const timeWithMinutes12h = lower.match(
-    /\b(\d{1,2})[:.](\d{2})\s*(am|pm)\b/i
+    /\b(\d{1,2})[:.](\d{2})\s*(am|pm|a\.m\.?|p\.m\.?)\b/i
   );
   if (timeWithMinutes12h) {
     let h = parseInt(timeWithMinutes12h[1], 10);
     const m = parseInt(timeWithMinutes12h[2], 10);
-    const meridian = timeWithMinutes12h[3].toLowerCase();
+    const meridian = timeWithMinutes12h[3].toLowerCase().replace(/\./g, "");
 
     if (meridian === "pm" && h < 12) h += 12;
     if (meridian === "am" && h === 12) h = 0;
@@ -234,12 +239,12 @@ export function parseNaturalReminder(
     extractedMinutes = m;
   }
 
-  // Case 3c: "H am/pm" or "HH am/pm" (e.g. "5 pm", "10am", "at 9 PM")
+  // Case 3c: "H am/pm" or "HH am/pm" (e.g. "5 pm", "10am", "at 9 PM", "3 p.m.")
   if (extractedHours === null) {
-    const timeNoMinutes12h = lower.match(/\b(\d{1,2})\s*(am|pm)\b/i);
+    const timeNoMinutes12h = lower.match(/\b(\d{1,2})\s*(am|pm|a\.m\.?|p\.m\.?)\b/i);
     if (timeNoMinutes12h) {
       let h = parseInt(timeNoMinutes12h[1], 10);
-      const meridian = timeNoMinutes12h[2].toLowerCase();
+      const meridian = timeNoMinutes12h[2].toLowerCase().replace(/\./g, "");
 
       if (meridian === "pm" && h < 12) h += 12;
       if (meridian === "am" && h === 12) h = 0;
@@ -248,12 +253,18 @@ export function parseNaturalReminder(
     }
   }
 
-  // Case 3d: "at HH:MM" 24-hour format (e.g. "at 16:30", "at 09:15")
+  // Case 3d: "at HH:MM" format (e.g. "at 16:30", "at 09:15", "at 3:00")
   if (extractedHours === null) {
-    const time24h = lower.match(/\bat\s+(\d{1,2})[:.](\d{2})\b/i);
+    const time24h = lower.match(/\bat\s+(\d{1,2})[:.](\d{2})(?!\s*(?:am|pm|a\.m|p\.m))\b/i);
     if (time24h) {
-      extractedHours = parseInt(time24h[1], 10);
-      extractedMinutes = parseInt(time24h[2], 10);
+      let h = parseInt(time24h[1], 10);
+      const m = parseInt(time24h[2], 10);
+      // In business and personal speech, "at 1:00" through "at 7:00" defaults to PM unless "morning" is in text
+      if (h >= 1 && h <= 7 && !lower.includes("morning") && !lower.includes("am")) {
+        h += 12;
+      }
+      extractedHours = h;
+      extractedMinutes = m;
     }
   }
 
@@ -466,7 +477,7 @@ export function parseNaturalReminder(
     );
   }
 
-  const title = cleanReminderTitle(text);
+  const title = cleanReminderTitle(rawText);
 
   return {
     isReminder,
@@ -490,6 +501,9 @@ export function cleanReminderTitle(rawText: string): string {
 
   // Strip prefixes
   cleaned = cleaned
+    .replace(/\bp\.m\.?/gi, "pm")
+    .replace(/\ba\.m\.?/gi, "am")
+    .replace(/^(?:tomorrow\s+|today\s+|tonight\s+)?(?:i\s+have\s+(?:an?\s+)?|i\s+got\s+(?:an?\s+)?)/i, "")
     .replace(/^(?:i\s+have\s+to|i\s+need\s+to|i\s+must|i\s+should)\s+/i, "")
     .replace(/^(?:please\s+)?remind\s+me\s+(?:to\s+|about\s+|that\s+)?/i, "")
     .replace(/^set\s+a\s+reminder\s+(?:for\s+|to\s+)?/i, "")
@@ -498,10 +512,10 @@ export function cleanReminderTitle(rawText: string): string {
     .replace(/^schedule\s+(?:a\s+)?(?:meeting\s+with\s+|appointment\s+with\s+)?/i, "")
     .trim();
 
-  // Strip date & time suffixes from the title so title is a concise action (e.g. "Call John")
+  // Strip date & time suffixes from the title so title is a concise action (e.g. "Call John", "Important Meeting")
   cleaned = cleaned
     .replace(/\s+(?:tomorrow|today|tonight)(?:\s+at\s+.*)?$/i, "")
-    .replace(/\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?.*$/i, "")
+    .replace(/\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.?|p\.m\.?).*$/i, "")
     .replace(/\s+(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+.*)?$/i, "")
     .replace(/\s+in\s+\d+\s*(?:minute|min|hour|hr|day)s?.*$/i, "")
     .replace(/\s+daily(?:\s+at\s+.*)?$/i, "")
@@ -596,10 +610,10 @@ export function generateSmartListInfo(rawText: string): {
   const checklist =
     items.length > 0
       ? items.map((text, idx) => ({
-          id: (idx + 1).toString(),
-          text: text.charAt(0).toUpperCase() + text.slice(1),
-          completed: false,
-        }))
+        id: (idx + 1).toString(),
+        text: text.charAt(0).toUpperCase() + text.slice(1),
+        completed: false,
+      }))
       : [{ id: "1", text: rawText, completed: false }];
 
   return { title, content, checklist };

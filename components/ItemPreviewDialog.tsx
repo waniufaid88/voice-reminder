@@ -7,6 +7,7 @@ import toast from "react-hot-toast";
 
 import { AudioPlayer } from "./AudioPlayer";
 import { RecurrenceSelector } from "./RecurrenceSelector";
+import { DateTimePicker12h } from "./DateTimePicker12h";
 import { formatLocalDatetime, parseLocalDatetime, formatAudioDuration } from "@/lib/date-utils";
 import { parseNaturalReminder } from "@/lib/natural-date-parser";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
@@ -97,11 +98,13 @@ export function ItemPreviewDialog({
         itemData.recurrenceMode || (itemData.isDaily ? "daily" : "once");
       let calculatedDays = itemData.recurrenceDays;
 
-      // If due date was not set, parse natural language from text or transcript
+      // If due date was not set, parse natural language from text or transcript with client timezone offset
       if (!calculatedDueDate) {
+        const offset = new Date().getTimezoneOffset();
         const natural = parseNaturalReminder(
           cleanContent || itemData.title || "",
-          new Date()
+          new Date(),
+          offset
         );
         if (natural.dueDate) {
           calculatedDueDate = natural.dueDate;
@@ -110,8 +113,19 @@ export function ItemPreviewDialog({
         }
       }
 
+      // Automatically route to the exact category in the dialog:
+      // If reminder due date/time is present -> strictly "reminder"
+      // If checklist items exist -> strictly "list"
+      // Otherwise -> "note"
+      let itemType: "note" | "reminder" | "list" = itemData.type || "note";
+      if (itemData.checklist && itemData.checklist.length > 0) {
+        itemType = "list";
+      } else if (calculatedDueDate || itemData.dueDateLocal || itemData.dueDate) {
+        itemType = "reminder";
+      }
+
       reset({
-        type: itemData.type || "note",
+        type: itemType,
         title: itemData.title || "Untitled",
         content: cleanContent,
         dueDateString:
@@ -122,6 +136,7 @@ export function ItemPreviewDialog({
         checklist: itemData.checklist || [],
         tags: itemData.tags || ["#voice"],
       });
+      setValue("type", itemType, { shouldValidate: true });
     }
   }, [itemData, reset]);
 

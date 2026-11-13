@@ -45,21 +45,21 @@ export function parseLocalDatetime(
     return undefined;
   }
 
-  // If timezoneOffsetMinutes is provided, compute using Date.UTC
-  if (timezoneOffsetMinutes !== undefined) {
-    return (
-      Date.UTC(year, month - 1, day, hours, minutes, 0, 0) +
-      timezoneOffsetMinutes * 60 * 1000
-    );
-  }
+  const offset =
+    timezoneOffsetMinutes !== undefined
+      ? timezoneOffsetMinutes
+      : typeof window !== "undefined"
+        ? new Date().getTimezoneOffset()
+        : 0;
 
-  // Construct explicitly in the user's local timezone
-  const localDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
-  return isNaN(localDate.getTime()) ? undefined : localDate.getTime();
+  return (
+    Date.UTC(year, month - 1, day, hours, minutes, 0, 0) +
+    offset * 60 * 1000
+  );
 }
 
 /**
- * Formats a timestamp into a human-readable string in local timezone (e.g. "Today at 3:00 PM")
+ * Formats a timestamp into a human-readable string in local timezone (e.g. "Tomorrow at 03:00 PM")
  */
 export function formatReadableDueDate(timestamp?: number | null): string {
   if (!timestamp) return "";
@@ -73,11 +73,12 @@ export function formatReadableDueDate(timestamp?: number | null): string {
   const isToday = date.toDateString() === today.toDateString();
   const isTomorrow = date.toDateString() === tomorrow.toDateString();
 
-  const timeStr = date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  let hours = date.getHours();
+  const minutes = date.getMinutes();
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  const timeStr = `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")} ${ampm}`;
 
   const dayOfWeek = date.toLocaleDateString([], { weekday: "short" });
 

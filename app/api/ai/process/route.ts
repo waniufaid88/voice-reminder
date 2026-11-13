@@ -206,8 +206,8 @@ export async function POST(req: NextRequest) {
         const tomorrowDateStr = `${monthNames[tomorrowWallClock.getUTCMonth()]} ${tomorrowWallClock.getUTCDate()}, ${tomorrowWallClock.getUTCFullYear()}`;
 
         const systemPrompt = `You are an intelligent assistant that categorizes raw user thoughts/voice transcriptions into one of three formats:
-1. "note": General thought, meeting note, idea, journal, or informational summary.
-2. "reminder": A task with a specific deadline, due date, scheduled time, or future action.
+1. "note": General thought, idea, journal, or informational summary without any deadline, scheduled time, or future action.
+2. "reminder": Any task, meeting, appointment, deadline, scheduled time, or future action (e.g. "Tomorrow I have an important meeting at 3:00 p.m." MUST be categorized as "reminder").
 3. "list": A checklist of multiple actionable items, groceries, or todo steps.
 
 CRITICAL USER TIMEZONE CONTEXT:
@@ -304,11 +304,10 @@ Respond ONLY with valid JSON with this exact structure:
             finalDueDate = parseLocalDatetime(parsed.dueDateLocal, clientTimezoneOffset);
           }
 
-          // If user specified an explicit time/day, prioritize natural parser's exact offset calculation
-          if (natural.dueDate && (!finalDueDate || natural.detectedTime)) {
+          // If GPT didn't provide a valid dueDate or if natural parser found a specific date/time fallback
+          if (!finalDueDate && natural.dueDate) {
             finalDueDate = natural.dueDate;
             dueDateLocal = natural.dueDateLocal;
-            if (parsed.type !== "reminder") parsed.type = "reminder";
           }
 
           const recurrenceMode =
@@ -316,7 +315,21 @@ Respond ONLY with valid JSON with this exact structure:
           const recurrenceDays =
             parsed.recurrenceDays || natural.recurrenceDays;
 
-          const finalType = parsed.type || (natural.isReminder ? "reminder" : "note");
+          // Categorization enforcement:
+          // 1. Any item with a detected due date/time or reminder intent is strictly a reminder
+          // 2. Any item with a checklist or list intent is strictly a list
+          // 3. Otherwise note
+          let finalType: "note" | "reminder" | "list" = parsed.type;
+          if (finalDueDate || natural.dueDate || natural.isReminder) {
+            finalType = "reminder";
+          } else if (
+            (parsed.checklist && parsed.checklist.length > 0) ||
+            parsed.type === "list"
+          ) {
+            finalType = "list";
+          } else if (!finalType) {
+            finalType = "note";
+          }
           let finalTitle = parsed.title?.trim() || "";
           let finalContent = parsed.content?.trim() || "";
 
