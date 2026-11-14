@@ -8,7 +8,7 @@ import { ItemCard, ItemRecord } from "./ItemCard";
 import { Button } from "./ui/button";
 
 interface TabBasedReminderDashboardProps {
-  userId?: Id<"users"> | null;
+  userId: Id<"users">;
   currentTime: number;
   searchQuery?: string;
   selectedTag?: string | null;
@@ -42,17 +42,12 @@ export function TabBasedReminderDashboard({
         : completedLimit;
 
   // 7. Performance: Fetch accurate counts separately from the loaded records
-  const counts = useQuery(
-    api.items.getReminderCounts,
-    userId
-      ? {
-        userId,
-        clientNow: currentTime > 0 ? currentTime : undefined,
-        searchQuery: searchQuery || undefined,
-        tag: selectedTag || undefined,
-      }
-      : "skip"
-  );
+  const counts = useQuery(api.items.getReminderCounts, {
+    userId,
+    clientNow: currentTime > 0 ? currentTime : undefined,
+    searchQuery: searchQuery || undefined,
+    tag: selectedTag || undefined,
+  });
 
   // Preserve previous counts during background query refreshes to prevent count flicker
   const [cachedCounts, setCachedCounts] = useState<{
@@ -74,19 +69,14 @@ export function TabBasedReminderDashboard({
   const currentCounts = counts ?? cachedCounts;
 
   // 7. Performance: Fetch ONLY the records needed for the currently active tab
-  const tabData = useQuery(
-    api.items.getRemindersByTab,
-    userId
-      ? {
-        userId,
-        tab: activeTab,
-        limit: currentLimit,
-        clientNow: currentTime > 0 ? currentTime : undefined,
-        searchQuery: searchQuery || undefined,
-        tag: selectedTag || undefined,
-      }
-      : "skip"
-  );
+  const tabData = useQuery(api.items.getRemindersByTab, {
+    userId,
+    tab: activeTab,
+    limit: currentLimit,
+    clientNow: currentTime > 0 ? currentTime : undefined,
+    searchQuery: searchQuery || undefined,
+    tag: selectedTag || undefined,
+  });
 
   // Preserve previous tabData per tab & search key so 10-second ticker refreshes do NOT blink or show skeletons
   const [cachedTabData, setCachedTabData] = useState<
