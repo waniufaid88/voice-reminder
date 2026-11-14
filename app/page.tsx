@@ -13,7 +13,7 @@ import { FilterBar } from "@/components/FilterBar";
 import { EditItemDialog } from "@/components/EditItemDialog";
 import { NotificationWatcher } from "@/components/NotificationWatcher";
 import { StructuredItemData } from "@/components/ItemPreviewDialog";
-import { SmartReminderSections } from "@/components/SmartReminderSections";
+import { TabBasedReminderDashboard } from "@/components/TabBasedReminderDashboard";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -34,7 +34,6 @@ export default function DashboardPage() {
 
   // Filter & Search states
   const [activeTab, setActiveTab] = useState<"all" | "note" | "reminder" | "list">("all");
-  const [reminderSubFilter, setReminderSubFilter] = useState<"all" | "upcoming" | "overdue" | "completed">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<ItemRecord | null>(null);
@@ -87,17 +86,14 @@ export default function DashboardPage() {
     return Array.from(set);
   }, [rawItems]);
 
-  // Filtered items based on tab, search query, and selected tag
-  const filteredItems = useMemo(() => {
+  // Filtered non-reminder items (notes & lists)
+  const filteredNonReminders = useMemo(() => {
     if (!rawItems) return [];
     return rawItems.filter((item) => {
-      // Tab filter
+      if (item.type === "reminder") return false;
       if (activeTab !== "all" && item.type !== activeTab) return false;
-
-      // Tag filter
       if (selectedTag && !item.tags.includes(selectedTag)) return false;
 
-      // Search query filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const matchesTitle = item.title.toLowerCase().includes(q);
@@ -126,60 +122,21 @@ export default function DashboardPage() {
     };
   }, [rawItems]);
 
-  // 1. Upcoming Reminders:
-  // Scheduled due time is strictly in the future (dueDate > currentTime) and NOT completed.
-  // Sorted nearest upcoming first (chronological ascending order).
-  const upcomingReminders = useMemo(() => {
-    return filteredItems
-      .filter(
-        (i) =>
-          i.type === "reminder" &&
-          i.reminderStatus !== "completed" &&
-          i.dueDate &&
-          (currentTime === 0 || i.dueDate > currentTime)
-      )
-      .sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
-  }, [filteredItems, currentTime]);
-
-  // 2. Pending / Overdue Reminders:
-  // Scheduled due time has arrived or passed (dueDate <= currentTime) and NOT completed.
-  // Sorted oldest overdue first (chronological ascending order).
-  const overdueReminders = useMemo(() => {
-    if (currentTime === 0) return [];
-    return filteredItems
-      .filter(
-        (i) =>
-          i.type === "reminder" &&
-          i.reminderStatus !== "completed" &&
-          (!i.dueDate || i.dueDate <= currentTime)
-      )
-      .sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
-  }, [filteredItems, currentTime]);
-
-  // 3. Completed Reminders:
-  // Marked completed (reminderStatus === "completed"). Never shown in upcoming or pending.
-  // Sorted most recently completed first (descending).
-  const completedReminders = useMemo(() => {
-    return filteredItems
-      .filter((i) => i.type === "reminder" && i.reminderStatus === "completed")
-      .sort(
-        (a, b) =>
-          ((b as unknown as { updatedAt?: number }).updatedAt || b.dueDate || 0) -
-          ((a as unknown as { updatedAt?: number }).updatedAt || a.dueDate || 0)
-      );
-  }, [filteredItems]);
-
   // Pinned non-reminders (notes & lists)
   const pinnedNonReminders = useMemo(
-    () => filteredItems.filter((i) => i.isPinned && i.type !== "reminder"),
-    [filteredItems]
+    () => filteredNonNonReminders(filteredNonReminders, true),
+    [filteredNonReminders]
   );
 
   // Regular non-reminders (notes & lists)
   const regularNonReminders = useMemo(
-    () => filteredItems.filter((i) => !i.isPinned && i.type !== "reminder"),
-    [filteredItems]
+    () => filteredNonNonReminders(filteredNonReminders, false),
+    [filteredNonReminders]
   );
+
+  function filteredNonNonReminders(items: ItemRecord[], isPinned: boolean) {
+    return items.filter((i) => i.isPinned === isPinned);
+  }
 
   // Save new item handler (with audio upload if recorded)
   const handleSaveItem = async (data: StructuredItemData) => {
@@ -238,11 +195,6 @@ export default function DashboardPage() {
       </div>
     );
   }
-
-  const hasAnyReminders =
-    upcomingReminders.length > 0 ||
-    overdueReminders.length > 0 ||
-    completedReminders.length > 0;
 
   return (
     <div className="min-h-screen bg-zinc-50/60 pb-20 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50">
@@ -354,66 +306,33 @@ export default function DashboardPage() {
             ))}
           </div>
         ) : activeTab === "reminder" ? (
-          /* Standalone Smart Reminders Dashboard */
-          filteredItems.length === 0 && searchQuery ? (
-            <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 py-16 text-center dark:border-zinc-800">
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400 text-2xl">
-                🔍
-              </div>
-              <h3 className="mt-4 text-base font-bold text-zinc-900 dark:text-zinc-100">
-                No reminders match &ldquo;{searchQuery}&rdquo;
-              </h3>
-              <p className="mt-1 text-xs text-zinc-500 max-w-sm">
-                Try adjusting your search terms or clearing selected tags.
-              </p>
-            </div>
-          ) : (
-            <SmartReminderSections
-              upcoming={upcomingReminders as ItemRecord[]}
-              overdue={overdueReminders as ItemRecord[]}
-              completed={completedReminders as ItemRecord[]}
-              onEdit={setEditingItem}
-              activeSubFilter={reminderSubFilter}
-              onSubFilterChange={setReminderSubFilter}
+          /* Dedicated Tab-Based Smart Reminder Dashboard */
+          user && (
+            <TabBasedReminderDashboard
+              userId={user._id as Id<"users">}
+              currentTime={currentTime}
               searchQuery={searchQuery}
-              isStandaloneView={true}
-              hideEmptySections={false}
+              selectedTag={selectedTag}
+              onEdit={setEditingItem}
             />
           )
-        ) : filteredItems.length === 0 ? (
-          /* Empty State for All / Note / List */
-          <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 py-16 text-center dark:border-zinc-800">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 text-2xl">
-              🎙️
-            </div>
-            <h3 className="mt-4 text-base font-bold text-zinc-900 dark:text-zinc-100">
-              {searchQuery || selectedTag || activeTab !== "all"
-                ? "No items match your filter"
-                : "No notes, reminders or lists yet"}
-            </h3>
-            <p className="mt-1 text-xs text-zinc-500 max-w-sm">
-              {searchQuery || selectedTag || activeTab !== "all"
-                ? "Try adjusting your search terms or clearing selected tags."
-                : "Click the microphone button above to record your voice, or type a task to let AI organize it automatically."}
-            </p>
-          </div>
         ) : (
-          /* Multi-type Dashboard Grid */
+          /* Multi-type Dashboard Grid (All / Note / List) */
           <div className="space-y-6 sm:space-y-8">
-            {/* 1. Smart Reminder Sections (Upcoming, Overdue, and Completed) */}
-            {activeTab === "all" && hasAnyReminders && (
-              <SmartReminderSections
-                upcoming={upcomingReminders as ItemRecord[]}
-                overdue={overdueReminders as ItemRecord[]}
-                completed={completedReminders as ItemRecord[]}
-                onEdit={setEditingItem}
+            {/* Tab-Based Reminders Section (Only on "All" tab when reminders exist) */}
+            {activeTab === "all" && user && (
+              <TabBasedReminderDashboard
+                userId={user._id as Id<"users">}
+                currentTime={currentTime}
                 searchQuery={searchQuery}
-                isStandaloneView={false}
-                hideEmptySections={true}
+                selectedTag={selectedTag}
+                onEdit={setEditingItem}
+                title="Reminders"
+                hideIfEmpty={true}
               />
             )}
 
-            {/* 2. Pinned Items (Notes & Lists) */}
+            {/* Pinned Non-Reminder Items (Notes & Lists) */}
             {pinnedNonReminders.length > 0 && (
               <div className="space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
@@ -431,18 +350,16 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {/* 3. Regular Items (Notes & Lists) */}
+            {/* Regular Non-Reminder Items (Notes & Lists) */}
             {regularNonReminders.length > 0 && (
               <div className="space-y-3">
-                {(hasAnyReminders || pinnedNonReminders.length > 0) && (
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                    {activeTab === "note"
-                      ? `Notes (${regularNonReminders.length})`
-                      : activeTab === "list"
-                        ? `Lists (${regularNonReminders.length})`
-                        : `Notes & Lists (${regularNonReminders.length})`}
-                  </h2>
-                )}
+                <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                  {activeTab === "note"
+                    ? `Notes (${regularNonReminders.length})`
+                    : activeTab === "list"
+                      ? `Lists (${regularNonReminders.length})`
+                      : `Notes & Lists (${regularNonReminders.length})`}
+                </h2>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {regularNonReminders.map((item) => (
                     <ItemCard
@@ -452,6 +369,40 @@ export default function DashboardPage() {
                     />
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* Empty State when no notes or lists match in active view */}
+            {filteredNonReminders.length === 0 && (activeTab === "note" || activeTab === "list") && (
+              <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 py-16 text-center dark:border-zinc-800">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 text-2xl">
+                  {activeTab === "note" ? "📝" : "✓"}
+                </div>
+                <h3 className="mt-4 text-base font-bold text-zinc-900 dark:text-zinc-100">
+                  {searchQuery || selectedTag
+                    ? `No ${activeTab}s match your filter`
+                    : `No ${activeTab}s yet`}
+                </h3>
+                <p className="mt-1 text-xs text-zinc-500 max-w-sm">
+                  {searchQuery || selectedTag
+                    ? "Try adjusting your search terms or clearing selected tags."
+                    : `Click the microphone button above to record your voice or type text to create a ${activeTab}.`}
+                </p>
+              </div>
+            )}
+
+            {/* Empty state for "all" if completely empty */}
+            {activeTab === "all" && rawItems.length === 0 && (
+              <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 py-16 text-center dark:border-zinc-800">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 text-2xl">
+                  🎙️
+                </div>
+                <h3 className="mt-4 text-base font-bold text-zinc-900 dark:text-zinc-100">
+                  No notes, reminders or lists yet
+                </h3>
+                <p className="mt-1 text-xs text-zinc-500 max-w-sm">
+                  Click the microphone button above to record your voice, or type a task to let AI organize it automatically.
+                </p>
               </div>
             )}
           </div>

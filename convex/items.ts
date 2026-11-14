@@ -303,3 +303,133 @@ export const deleteItem = mutation({
   },
 });
 
+export const getReminderCounts = query({
+  args: {
+    userId: v.id("users"),
+    clientNow: v.optional(v.number()),
+    searchQuery: v.optional(v.string()),
+    tag: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = args.clientNow ?? Date.now();
+    const reminders = await ctx.db
+      .query("items")
+      .withIndex("by_userId_type", (q) =>
+        q.eq("userId", args.userId).eq("type", "reminder")
+      )
+      .collect();
+
+    let upcoming = 0;
+    let overdue = 0;
+    let completed = 0;
+
+    const queryFilter = args.searchQuery?.trim().toLowerCase();
+    const tagFilter = args.tag;
+
+    for (const r of reminders) {
+      if (tagFilter && !r.tags.includes(tagFilter)) continue;
+      if (queryFilter) {
+        const matchesTitle = r.title.toLowerCase().includes(queryFilter);
+        const matchesContent = r.content.toLowerCase().includes(queryFilter);
+        const matchesTag = r.tags.some((t) => t.toLowerCase().includes(queryFilter));
+        const matchesChecklist = r.checklist?.some((ci) =>
+          ci.text.toLowerCase().includes(queryFilter)
+        );
+        if (!matchesTitle && !matchesContent && !matchesTag && !matchesChecklist) continue;
+      }
+
+      if (r.reminderStatus === "completed") {
+        completed++;
+      } else if (r.dueDate !== undefined && r.dueDate > now) {
+        upcoming++;
+      } else {
+        overdue++;
+      }
+    }
+
+    return {
+      upcoming,
+      overdue,
+      completed,
+      total: upcoming + overdue + completed,
+    };
+  },
+});
+
+export const getRemindersByTab = query({
+  args: {
+    userId: v.id("users"),
+    tab: v.union(
+      v.literal("upcoming"),
+      v.literal("overdue"),
+      v.literal("completed")
+    ),
+    limit: v.number(),
+    clientNow: v.optional(v.number()),
+    searchQuery: v.optional(v.string()),
+    tag: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = args.clientNow ?? Date.now();
+    const reminders = await ctx.db
+      .query("items")
+      .withIndex("by_userId_type", (q) =>
+        q.eq("userId", args.userId).eq("type", "reminder")
+      )
+      .collect();
+
+    const queryFilter = args.searchQuery?.trim().toLowerCase();
+    const tagFilter = args.tag;
+
+    let filtered = reminders.filter((r) => {
+      if (tagFilter && !r.tags.includes(tagFilter)) return false;
+      if (queryFilter) {
+        const matchesTitle = r.title.toLowerCase().includes(queryFilter);
+        const matchesContent = r.content.toLowerCase().includes(queryFilter);
+        const matchesTag = r.tags.some((t) => t.toLowerCase().includes(queryFilter));
+        const matchesChecklist = r.checklist?.some((ci) =>
+          ci.text.toLowerCase().includes(queryFilter)
+        );
+        if (!matchesTitle && !matchesContent && !matchesTag && !matchesChecklist) return false;
+      }
+      return true;
+    });
+
+    if (args.tab === "upcoming") {
+      filtered = filtered
+        .filter(
+          (r) =>
+            r.reminderStatus !== "completed" &&
+            r.dueDate !== undefined &&
+            r.dueDate > now
+        )
+        .sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
+    } else if (args.tab === "overdue") {
+      filtered = filtered
+        .filter(
+          (r) =>
+            r.reminderStatus !== "completed" &&
+            (!r.dueDate || r.dueDate <= now)
+        )
+        .sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
+    } else if (args.tab === "completed") {
+      filtered = filtered
+        .filter((r) => r.reminderStatus === "completed")
+        .sort(
+          (a, b) =>
+            (b.updatedAt || b.dueDate || 0) - (a.updatedAt || a.dueDate || 0)
+        );
+    }
+
+    const totalCount = filtered.length;
+    const items = filtered.slice(0, args.limit);
+    const hasMore = totalCount > args.limit;
+
+    return {
+      items,
+      totalCount,
+      hasMore,
+    };
+  },
+});
+
