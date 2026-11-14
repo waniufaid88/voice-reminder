@@ -8,7 +8,7 @@ import { ItemCard, ItemRecord } from "./ItemCard";
 import { Button } from "./ui/button";
 
 interface TabBasedReminderDashboardProps {
-  userId: Id<"users">;
+  userId?: Id<"users"> | null;
   currentTime: number;
   searchQuery?: string;
   selectedTag?: string | null;
@@ -42,12 +42,17 @@ export function TabBasedReminderDashboard({
         : completedLimit;
 
   // 7. Performance: Fetch accurate counts separately from the loaded records
-  const counts = useQuery(api.items.getReminderCounts, {
-    userId,
-    clientNow: currentTime > 0 ? currentTime : undefined,
-    searchQuery: searchQuery || undefined,
-    tag: selectedTag || undefined,
-  });
+  const counts = useQuery(
+    api.items.getReminderCounts,
+    userId
+      ? {
+        userId,
+        clientNow: currentTime > 0 ? currentTime : undefined,
+        searchQuery: searchQuery || undefined,
+        tag: selectedTag || undefined,
+      }
+      : "skip"
+  );
 
   // Preserve previous counts during background query refreshes to prevent count flicker
   const [cachedCounts, setCachedCounts] = useState<{
@@ -69,14 +74,19 @@ export function TabBasedReminderDashboard({
   const currentCounts = counts ?? cachedCounts;
 
   // 7. Performance: Fetch ONLY the records needed for the currently active tab
-  const tabData = useQuery(api.items.getRemindersByTab, {
-    userId,
-    tab: activeTab,
-    limit: currentLimit,
-    clientNow: currentTime > 0 ? currentTime : undefined,
-    searchQuery: searchQuery || undefined,
-    tag: selectedTag || undefined,
-  });
+  const tabData = useQuery(
+    api.items.getRemindersByTab,
+    userId
+      ? {
+        userId,
+        tab: activeTab,
+        limit: currentLimit,
+        clientNow: currentTime > 0 ? currentTime : undefined,
+        searchQuery: searchQuery || undefined,
+        tag: selectedTag || undefined,
+      }
+      : "skip"
+  );
 
   // Preserve previous tabData per tab & search key so 10-second ticker refreshes do NOT blink or show skeletons
   const [cachedTabData, setCachedTabData] = useState<
@@ -170,20 +180,18 @@ export function TabBasedReminderDashboard({
         <button
           type="button"
           onClick={() => setActiveTab("upcoming")}
-          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold transition-all cursor-pointer select-none sm:px-4 sm:min-h-[38px] ${
-            activeTab === "upcoming"
-              ? "bg-white text-amber-700 shadow-sm dark:bg-zinc-900 dark:text-amber-400 ring-1 ring-amber-300/40 dark:ring-amber-500/30"
-              : "text-zinc-600 hover:text-zinc-900 hover:bg-white/50 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800/50"
-          }`}
+          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold transition-all cursor-pointer select-none sm:px-4 sm:min-h-[38px] ${activeTab === "upcoming"
+            ? "bg-white text-amber-700 shadow-sm dark:bg-zinc-900 dark:text-amber-400 ring-1 ring-amber-300/40 dark:ring-amber-500/30"
+            : "text-zinc-600 hover:text-zinc-900 hover:bg-white/50 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800/50"
+            }`}
         >
           <span className="text-sm">⏰</span>
           <span className="truncate">Upcoming</span>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
-              activeTab === "upcoming"
-                ? "bg-amber-100 text-amber-900 dark:bg-amber-950/80 dark:text-amber-200"
-                : "bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
-            }`}
+            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${activeTab === "upcoming"
+              ? "bg-amber-100 text-amber-900 dark:bg-amber-950/80 dark:text-amber-200"
+              : "bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
+              }`}
           >
             {upcomingCount}
           </span>
@@ -193,22 +201,20 @@ export function TabBasedReminderDashboard({
         <button
           type="button"
           onClick={() => setActiveTab("overdue")}
-          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold transition-all cursor-pointer select-none sm:px-4 sm:min-h-[38px] ${
-            activeTab === "overdue"
-              ? "bg-white text-rose-700 shadow-sm dark:bg-zinc-900 dark:text-rose-400 ring-1 ring-rose-300/50 dark:ring-rose-500/30"
-              : "text-zinc-600 hover:text-zinc-900 hover:bg-white/50 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800/50"
-          }`}
+          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold transition-all cursor-pointer select-none sm:px-4 sm:min-h-[38px] ${activeTab === "overdue"
+            ? "bg-white text-rose-700 shadow-sm dark:bg-zinc-900 dark:text-rose-400 ring-1 ring-rose-300/50 dark:ring-rose-500/30"
+            : "text-zinc-600 hover:text-zinc-900 hover:bg-white/50 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800/50"
+            }`}
         >
           <span className="text-sm">⚠️</span>
           <span className="truncate">Overdue</span>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
-              activeTab === "overdue"
-                ? "bg-rose-100 text-rose-900 dark:bg-rose-950/80 dark:text-rose-200"
-                : overdueCount > 0
-                  ? "bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 font-extrabold"
-                  : "bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
-            }`}
+            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${activeTab === "overdue"
+              ? "bg-rose-100 text-rose-900 dark:bg-rose-950/80 dark:text-rose-200"
+              : overdueCount > 0
+                ? "bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 font-extrabold"
+                : "bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
+              }`}
           >
             {overdueCount}
           </span>
@@ -218,20 +224,18 @@ export function TabBasedReminderDashboard({
         <button
           type="button"
           onClick={() => setActiveTab("completed")}
-          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold transition-all cursor-pointer select-none sm:px-4 sm:min-h-[38px] ${
-            activeTab === "completed"
-              ? "bg-white text-emerald-700 shadow-sm dark:bg-zinc-900 dark:text-emerald-400 ring-1 ring-emerald-300/40 dark:ring-emerald-500/30"
-              : "text-zinc-600 hover:text-zinc-900 hover:bg-white/50 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800/50"
-          }`}
+          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold transition-all cursor-pointer select-none sm:px-4 sm:min-h-[38px] ${activeTab === "completed"
+            ? "bg-white text-emerald-700 shadow-sm dark:bg-zinc-900 dark:text-emerald-400 ring-1 ring-emerald-300/40 dark:ring-emerald-500/30"
+            : "text-zinc-600 hover:text-zinc-900 hover:bg-white/50 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800/50"
+            }`}
         >
           <span className="text-sm">✓</span>
           <span className="truncate">Completed</span>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
-              activeTab === "completed"
-                ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/80 dark:text-emerald-200"
-                : "bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
-            }`}
+            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${activeTab === "completed"
+              ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/80 dark:text-emerald-200"
+              : "bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
+              }`}
           >
             {completedCount}
           </span>
