@@ -23,6 +23,7 @@ interface BrowserSpeechRecognition extends EventTarget {
   abort: () => void;
   onresult: ((event: BrowserSpeechEvent) => void) | null;
   onerror: (() => void) | null;
+  onend: (() => void) | null;
 }
 
 export interface RecordingResult {
@@ -48,6 +49,7 @@ export function useVoiceRecorder() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const speechTranscriptRef = useRef<string>("");
+  const sessionTranscriptRef = useRef<string>("");
   const startTimeRef = useRef<number>(0);
   const elapsedTimeRef = useRef<number>(0);
 
@@ -64,6 +66,7 @@ export function useVoiceRecorder() {
       analyserRef.current = null;
       if (speechRecognitionRef.current) {
         try {
+          speechRecognitionRef.current.onend = null;
           speechRecognitionRef.current.stop();
         } catch {}
       }
@@ -76,6 +79,7 @@ export function useVoiceRecorder() {
     setDuration(0);
     setLiveTranscript("");
     speechTranscriptRef.current = "";
+    sessionTranscriptRef.current = "";
     startTimeRef.current = Date.now();
     elapsedTimeRef.current = 0;
 
@@ -105,13 +109,7 @@ export function useVoiceRecorder() {
       analyserRef.current = analyserNode;
       setAnalyser(analyserNode);
 
-      // On mobile devices (Android / iOS), do NOT run Web Speech API concurrently with getUserMedia/MediaRecorder
-      // because Android's audio layer does not support two simultaneous mic readers and mutes/corrupts the recording.
-      const isMobileDevice =
-        typeof navigator !== "undefined" &&
-        /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-      // Setup in-browser Web Speech API transcription on desktop (Chrome, Edge, Safari)
+      // Setup in-browser Web Speech API transcription (Chrome on Android, Chrome Desktop, Safari, Edge)
       const win = window as unknown as {
         SpeechRecognition?: new () => BrowserSpeechRecognition;
         webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
@@ -119,7 +117,7 @@ export function useVoiceRecorder() {
       const SpeechRecognitionClass =
         win.SpeechRecognition || win.webkitSpeechRecognition;
 
-      if (SpeechRecognitionClass && !isMobileDevice) {
+      if (SpeechRecognitionClass) {
         try {
           const recognition = new SpeechRecognitionClass();
           recognition.continuous = true;
@@ -127,17 +125,32 @@ export function useVoiceRecorder() {
           recognition.lang = "en-US";
 
           recognition.onresult = (event: BrowserSpeechEvent) => {
-            let fullText = "";
+            let currentText = "";
             for (let i = 0; i < event.results.length; i++) {
-              fullText += event.results[i][0].transcript + " ";
+              currentText += event.results[i][0].transcript + " ";
             }
-            const clean = fullText.trim();
-            speechTranscriptRef.current = clean;
-            setLiveTranscript(clean);
+            const clean = currentText.trim();
+            const combined = sessionTranscriptRef.current
+              ? `${sessionTranscriptRef.current} ${clean}`.trim()
+              : clean;
+            speechTranscriptRef.current = combined;
+            setLiveTranscript(combined);
           };
 
           recognition.onerror = () => {
             // Non-fatal, continue with audio recording
+          };
+
+          // On mobile Android Chrome, recognition pauses after brief silence; restart automatically while recording
+          recognition.onend = () => {
+            if (speechTranscriptRef.current) {
+              sessionTranscriptRef.current = speechTranscriptRef.current;
+            }
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+              try {
+                recognition.start();
+              } catch {}
+            }
           };
 
           recognition.start();
@@ -239,6 +252,7 @@ export function useVoiceRecorder() {
 
       if (speechRecognitionRef.current) {
         try {
+          speechRecognitionRef.current.onend = null;
           speechRecognitionRef.current.stop();
         } catch {}
       }
@@ -298,6 +312,7 @@ export function useVoiceRecorder() {
     if (timerRef.current) clearInterval(timerRef.current);
     if (speechRecognitionRef.current) {
       try {
+        speechRecognitionRef.current.onend = null;
         speechRecognitionRef.current.stop();
       } catch {}
     }

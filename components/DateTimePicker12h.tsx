@@ -92,10 +92,10 @@ export function DateTimePicker12h({
     updateDatetime(datePart, hour12, minuteStr, p);
   };
 
-  const minuteOptions = [
-    "00", "05", "10", "15", "20", "25",
-    "30", "35", "40", "45", "50", "55"
-  ];
+  // Include every minute from 00 to 59
+  const minuteOptions = Array.from({ length: 60 }, (_, i) =>
+  i.toString().padStart(2, "0")
+  );
 
   // Include current minute if it's not a multiple of 5
   if (!minuteOptions.includes(minuteStr)) {
@@ -140,11 +140,11 @@ export function DateTimePicker12h({
 
             {/* Minute (00-55) */}
             <select
-              value={minuteStr}
-              onChange={handleMinuteChange}
-              disabled={disabled}
-              aria-label="Minute"
-              className="rounded-md bg-transparent px-1.5 py-1 text-xs sm:text-sm font-mono font-bold text-zinc-800 dark:text-zinc-100 focus:outline-none cursor-pointer"
+            value={minuteStr}
+            onChange={handleMinuteChange}
+            disabled={disabled}
+            aria-label="Minute"
+            className="rounded-md bg-transparent px-1.5 py-1 text-xs sm:text-sm font-mono font-bold text-zinc-800 dark:text-zinc-100 focus:outline-none cursor-pointer"
             >
               {minuteOptions.map((m) => (
                 <option key={m} value={m} className="dark:bg-zinc-800">

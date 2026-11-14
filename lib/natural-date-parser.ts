@@ -609,12 +609,15 @@ export function generateSmartListInfo(rawText: string): {
 
   const checklist =
     items.length > 0
-      ? items.map((text, idx) => ({
-        id: (idx + 1).toString(),
-        text: text.charAt(0).toUpperCase() + text.slice(1),
-        completed: false,
-      }))
-      : [{ id: "1", text: rawText, completed: false }];
+      ? items.map((rawItem, idx) => {
+          const cleanedItem = rawItem.replace(/^[-,•*]\s*/, "").replace(/[.,;]+$/, "").trim();
+          return {
+            id: (idx + 1).toString(),
+            text: cleanedItem.charAt(0).toUpperCase() + cleanedItem.slice(1),
+            completed: false,
+          };
+        })
+      : [{ id: "1", text: rawText.replace(/[.,;]+$/, "").trim(), completed: false }];
 
   return { title, content, checklist };
 }
@@ -631,9 +634,11 @@ export function generateSmartNoteInfo(rawText: string): {
   const lower = trimmed.toLowerCase();
 
   const cleanedSubject = trimmed
+    .replace(/^(?:today\s+i\s+learned\s+(?:about|something\s+interesting\s+about|something\s+about)?|i\s+learned\s+(?:about|something\s+about)?)\s+/i, "")
     .replace(/^(?:today\s+i\s+discussed|i\s+discussed|we\s+discussed|discussion\s+about)\s+/i, "")
     .replace(/^(?:i\s+was\s+thinking\s+about|thought\s+about|idea\s+about|note\s+about)\s+/i, "")
     .replace(/^(?:today\s+|yesterday\s+|meeting\s+about\s+|note\s*:\s*)/i, "")
+    .replace(/[.,;!?]+$/, "")
     .trim();
 
   const words = cleanedSubject.split(/\s+/).filter(Boolean);

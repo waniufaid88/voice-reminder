@@ -9,7 +9,7 @@ import { AudioPlayer } from "./AudioPlayer";
 import { RecurrenceSelector } from "./RecurrenceSelector";
 import { DateTimePicker12h } from "./DateTimePicker12h";
 import { formatLocalDatetime, parseLocalDatetime, formatAudioDuration } from "@/lib/date-utils";
-import { parseNaturalReminder } from "@/lib/natural-date-parser";
+import { parseNaturalReminder, generateSmartListInfo } from "@/lib/natural-date-parser";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
 import {
   Dialog,
@@ -114,11 +114,27 @@ export function ItemPreviewDialog({
       }
 
       // Automatically route to the exact category in the dialog:
-      // If reminder due date/time is present -> strictly "reminder"
-      // If checklist items exist -> strictly "list"
-      // Otherwise -> "note"
+      // 1. If checklist items exist (or text describes a list) -> strictly "list"
+      // 2. If reminder due date/time is present -> strictly "reminder"
+      // 3. Otherwise -> "note"
+      let finalChecklist = itemData.checklist || [];
       let itemType: "note" | "reminder" | "list" = itemData.type || "note";
-      if (itemData.checklist && itemData.checklist.length > 0) {
+
+      if (
+        finalChecklist.length === 0 &&
+        (itemData.type === "list" ||
+          cleanContent.toLowerCase().includes("buy ") ||
+          cleanContent.toLowerCase().includes("list") ||
+          cleanContent.includes(","))
+      ) {
+        const listInfo = generateSmartListInfo(cleanContent);
+        if (listInfo.checklist && listInfo.checklist.length > 0) {
+          finalChecklist = listInfo.checklist;
+          itemType = "list";
+        }
+      }
+
+      if (finalChecklist.length > 0) {
         itemType = "list";
       } else if (calculatedDueDate || itemData.dueDateLocal || itemData.dueDate) {
         itemType = "reminder";
@@ -133,7 +149,7 @@ export function ItemPreviewDialog({
         isDaily: calculatedMode === "daily",
         recurrenceMode: calculatedMode,
         recurrenceDays: calculatedDays || [new Date().getDay()],
-        checklist: itemData.checklist || [],
+        checklist: finalChecklist,
         tags: itemData.tags || ["#voice"],
       });
       setValue("type", itemType, { shouldValidate: true });
