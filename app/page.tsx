@@ -33,7 +33,7 @@ export default function DashboardPage() {
   const [authLoading, setAuthLoading] = useState(true);
 
   // Filter & Search states
-  const [activeTab, setActiveTab] = useState<"all" | "note" | "reminder" | "list">("all");
+  const [activeTab, setActiveTab] = useState<"all" | "note" | "reminder" | "list">("reminder");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<ItemRecord | null>(null);

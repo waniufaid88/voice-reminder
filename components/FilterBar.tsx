@@ -33,47 +33,43 @@ export function FilterBar({
         <div className="flex items-center gap-1 overflow-x-auto rounded-xl bg-zinc-100 p-1 dark:bg-zinc-800/80">
           <button
             type="button"
-            onClick={() => onTabChange("all")}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-              activeTab === "all"
-                ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-900 dark:text-zinc-50"
-                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-            }`}
-          >
-            All ({counts.all})
-          </button>
-          <button
-            type="button"
-            onClick={() => onTabChange("note")}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-              activeTab === "note"
-                ? "bg-white text-indigo-700 shadow-xs dark:bg-zinc-900 dark:text-indigo-400"
-                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-            }`}
-          >
-            📝 Notes ({counts.note})
-          </button>
-          <button
-            type="button"
             onClick={() => onTabChange("reminder")}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-              activeTab === "reminder"
-                ? "bg-white text-amber-700 shadow-xs dark:bg-zinc-900 dark:text-amber-400"
-                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-            }`}
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${activeTab === "reminder"
+              ? "bg-white text-amber-700 shadow-xs dark:bg-zinc-900 dark:text-amber-400"
+              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
           >
             ⏰ Reminders ({counts.reminder})
           </button>
           <button
             type="button"
             onClick={() => onTabChange("list")}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-              activeTab === "list"
-                ? "bg-white text-emerald-700 shadow-xs dark:bg-zinc-900 dark:text-emerald-400"
-                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-            }`}
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${activeTab === "list"
+              ? "bg-white text-emerald-700 shadow-xs dark:bg-zinc-900 dark:text-emerald-400"
+              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
           >
             ✓ Lists ({counts.list})
+          </button>
+          <button
+            type="button"
+            onClick={() => onTabChange("note")}
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${activeTab === "note"
+              ? "bg-white text-indigo-700 shadow-xs dark:bg-zinc-900 dark:text-indigo-400"
+              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+          >
+            📝 Notes ({counts.note})
+          </button>
+          <button
+            type="button"
+            onClick={() => onTabChange("all")}
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${activeTab === "all"
+              ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-900 dark:text-zinc-50"
+              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+          >
+            All ({counts.all})
           </button>
         </div>
 
@@ -124,11 +120,10 @@ export function FilterBar({
               key={tag}
               type="button"
               onClick={() => onTagSelect(selectedTag === tag ? null : tag)}
-              className={`rounded-lg px-2 py-0.5 text-[11px] font-medium transition-all ${
-                selectedTag === tag
-                  ? "bg-indigo-600 text-white shadow-xs"
-                  : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
-              }`}
+              className={`rounded-lg px-2 py-0.5 text-[11px] font-medium transition-all ${selectedTag === tag
+                ? "bg-indigo-600 text-white shadow-xs"
+                : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
+                }`}
             >
               {tag}
             </button>

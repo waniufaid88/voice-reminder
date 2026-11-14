@@ -209,14 +209,25 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
 
     try {
       const formData = new FormData();
-      const filename =
-        result.blob.type.includes("mp4") || result.blob.type.includes("m4a")
-          ? "voice-note.mp4"
-          : result.blob.type.includes("ogg")
-          ? "voice-note.ogg"
-          : "voice-note.webm";
-      formData.append("audio", result.blob, filename);
-      formData.append("fallbackText", result.browserTranscript || "");
+      const rawMime = (result.blob.type || "").toLowerCase();
+      let filename = "voice-recording.webm";
+      let cleanType = "audio/webm";
+
+      if (rawMime.includes("mp4") || rawMime.includes("m4a")) {
+        filename = "voice-recording.mp4";
+        cleanType = "audio/mp4";
+      } else if (rawMime.includes("ogg")) {
+        filename = "voice-recording.ogg";
+        cleanType = "audio/ogg";
+      } else if (rawMime.includes("wav")) {
+        filename = "voice-recording.wav";
+        cleanType = "audio/wav";
+      }
+
+      // Create a clean audio blob without codec parameters for backend & Whisper API compatibility
+      const sanitizedBlob = new Blob([result.blob], { type: cleanType });
+      formData.append("audio", sanitizedBlob, filename);
+      formData.append("fallbackText", (result.browserTranscript || "").trim());
       formData.append(
         "clientTimezone",
         Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -232,8 +243,18 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
 
       const data = await res.json();
       if (!res.ok) {
-        toast("Saved voice recording.", { icon: "🎙️" });
-        const text = result.browserTranscript || "";
+        const text = (result.browserTranscript || "").trim();
+        // Do not default to Note when transcript is empty or incomplete; alert the user
+        if (!text) {
+          setIsProcessing(false);
+          setProcessingStatus("");
+          toast.error(
+            data?.error || "Could not transcribe audio. Please speak clearly and try again."
+          );
+          return;
+        }
+
+        toast("Transcribed using local speech recognition", { icon: "🎙️" });
         const offset = new Date().getTimezoneOffset();
         const natural = parseNaturalReminder(text, new Date(), offset);
 
@@ -247,7 +268,7 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
             recurrenceMode: natural.recurrenceMode || "once",
             recurrenceDays: natural.recurrenceDays,
             isDaily: natural.recurrenceMode === "daily",
-            audioBlob: result.blob,
+            audioBlob: sanitizedBlob,
             audioDuration: result.duration,
             audioPreviewUrl: result.url,
             tags: ["#reminder", "#voice"],
@@ -255,7 +276,11 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
         } else if (
           text.toLowerCase().includes("buy ") ||
           text.toLowerCase().includes("list") ||
-          text.includes(",")
+          text.toLowerCase().includes("groceries") ||
+          text.toLowerCase().includes("shopping") ||
+          text.toLowerCase().includes("todo") ||
+          text.includes(",") ||
+          text.toLowerCase().includes(" and ")
         ) {
           const listInfo = generateSmartListInfo(text);
           setPreviewData({
@@ -263,23 +288,24 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
             title: listInfo.title,
             content: listInfo.content,
             checklist: listInfo.checklist,
-            audioBlob: result.blob,
+            audioBlob: sanitizedBlob,
             audioDuration: result.duration,
             audioPreviewUrl: result.url,
             tags: ["#list", "#voice"],
           });
         } else {
-          const noteInfo = generateSmartNoteInfo(text || `Voice Note ${result.duration}s`);
+          const noteInfo = generateSmartNoteInfo(text);
           setPreviewData({
             type: "note",
             title: noteInfo.title,
             content: noteInfo.content,
-            audioBlob: result.blob,
+            audioBlob: sanitizedBlob,
             audioDuration: result.duration,
             audioPreviewUrl: result.url,
             tags: ["#note", "#voice"],
           });
         }
+        setIsPreviewOpen(true);
       } else {
         if (data.isQuotaExhausted) {
           toast(
@@ -291,14 +317,19 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
         }
         setPreviewData({
           ...data,
-          audioBlob: result.blob,
+          audioBlob: sanitizedBlob,
           audioDuration: result.duration,
           audioPreviewUrl: result.url,
         });
+        setIsPreviewOpen(true);
       }
-      setIsPreviewOpen(true);
     } catch {
-      const text = result.browserTranscript || "";
+      const text = (result.browserTranscript || "").trim();
+      if (!text) {
+        toast.error("Could not transcribe audio. Please speak clearly and try again.");
+        return;
+      }
+
       const offset = new Date().getTimezoneOffset();
       const natural = parseNaturalReminder(text, new Date(), offset);
 
@@ -320,7 +351,11 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       } else if (
         text.toLowerCase().includes("buy ") ||
         text.toLowerCase().includes("list") ||
-        text.includes(",")
+        text.toLowerCase().includes("groceries") ||
+        text.toLowerCase().includes("shopping") ||
+        text.toLowerCase().includes("todo") ||
+        text.includes(",") ||
+        text.toLowerCase().includes(" and ")
       ) {
         const listInfo = generateSmartListInfo(text);
         setPreviewData({
@@ -334,7 +369,7 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
           tags: ["#list", "#voice"],
         });
       } else {
-        const noteInfo = generateSmartNoteInfo(text || `Voice Note ${result.duration}s`);
+        const noteInfo = generateSmartNoteInfo(text);
         setPreviewData({
           type: "note",
           title: noteInfo.title,

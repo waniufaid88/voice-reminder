@@ -7,6 +7,49 @@ import {
 } from "@/lib/natural-date-parser";
 import { parseLocalDatetime } from "@/lib/date-utils";
 
+/**
+ * Normalizes audio MIME types and file extensions for OpenAI Whisper compatibility.
+ * Strips codecs parameters (e.g. "audio/webm;codecs=opus" -> "audio/webm") which cause
+ * OpenAI Whisper to reject mobile audio uploads with HTTP 400 Bad Request.
+ */
+function getWhisperMimeAndExt(
+  rawMime: string,
+  originalName?: string
+): { mime: string; ext: string } {
+  const baseMime = (rawMime || "").split(";")[0].trim().toLowerCase();
+  const name = (originalName || "").toLowerCase();
+
+  if (
+    baseMime.includes("mp4") ||
+    baseMime.includes("m4a") ||
+    name.endsWith(".mp4") ||
+    name.endsWith(".m4a")
+  ) {
+    return { mime: "audio/mp4", ext: "recording.mp4" };
+  }
+  if (baseMime.includes("ogg") || name.endsWith(".ogg")) {
+    return { mime: "audio/ogg", ext: "recording.ogg" };
+  }
+  if (baseMime.includes("wav") || name.endsWith(".wav")) {
+    return { mime: "audio/wav", ext: "recording.wav" };
+  }
+  if (
+    baseMime.includes("mpeg") ||
+    baseMime.includes("mp3") ||
+    name.endsWith(".mp3")
+  ) {
+    return { mime: "audio/mpeg", ext: "recording.mp3" };
+  }
+  if (baseMime.includes("aac") || name.endsWith(".aac")) {
+    return { mime: "audio/aac", ext: "recording.aac" };
+  }
+  if (baseMime.includes("flac") || name.endsWith(".flac")) {
+    return { mime: "audio/flac", ext: "recording.flac" };
+  }
+  // Standard fallback for Android Chrome MediaRecorder (audio/webm, video/webm, etc.)
+  return { mime: "audio/webm", ext: "recording.webm" };
+}
+
 // Intelligent rule-based extractor with full natural date, time, and recurrence support
 function parseTextRuleBased(
   rawText: string,
@@ -97,20 +140,19 @@ export async function POST(req: NextRequest) {
         // Step 1: Send audio to OpenAI Whisper API
         try {
           const whisperFormData = new FormData();
-          const audioExt = audioFile.type.includes("mp4") || audioFile.type.includes("m4a")
-            ? "recording.mp4"
-            : audioFile.type.includes("ogg")
-            ? "recording.ogg"
-            : "recording.webm";
+          const { mime: cleanMime, ext: cleanExt } = getWhisperMimeAndExt(
+            audioFile.type,
+            (audioFile as File).name
+          );
 
           const arrayBuffer = await audioFile.arrayBuffer();
           const audioBytes = new Uint8Array(arrayBuffer);
-          const mimeType = audioFile.type || (audioExt === "recording.mp4" ? "audio/mp4" : "audio/webm");
-          const fileToUpload = new File([audioBytes], audioExt, { type: mimeType });
+          const fileToUpload = new File([audioBytes], cleanExt, { type: cleanMime });
 
           whisperFormData.append("file", fileToUpload);
           whisperFormData.append("model", "whisper-1");
           whisperFormData.append("response_format", "json");
+          whisperFormData.append("prompt", "Voice reminder, meeting, appointment, checklist, grocery list, task, note.");
 
           const whisperRes = await fetch(
             "https://api.openai.com/v1/audio/transcriptions",
@@ -123,7 +165,16 @@ export async function POST(req: NextRequest) {
 
           if (whisperRes.ok) {
             const whisperData = await whisperRes.json();
-            rawText = whisperData.text || "";
+            const whisperText = (whisperData.text || "").trim();
+            // Filter common Whisper silence hallucinations on mobile recordings
+            const isHallucination =
+              /^(?:thanks for watching|thank you for watching|subscribe|you|bye|\.)\.?$/i.test(whisperText);
+
+            if (whisperText && !isHallucination) {
+              rawText = whisperText;
+            } else if (fallbackText) {
+              rawText = fallbackText;
+            }
           } else {
             const errJson = await whisperRes.json().catch(() => ({}));
             console.warn("Whisper API error:", errJson);
@@ -150,6 +201,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (!rawText.trim() && fallbackText.trim()) {
+      rawText = fallbackText.trim();
+    } else if (
+      rawText.trim().length < 4 &&
+      fallbackText.trim().length > rawText.trim().length
+    ) {
       rawText = fallbackText.trim();
     }
 
@@ -326,7 +382,12 @@ Respond ONLY with valid JSON with this exact structure:
           // 2. Any item with a checklist or list intent is strictly a list
           // 3. Otherwise note
           let finalType: "note" | "reminder" | "list" = parsed.type;
-          if (finalDueDate || natural.dueDate || natural.isReminder) {
+          if (
+            finalDueDate ||
+            natural.dueDate ||
+            natural.isReminder ||
+            parsed.type === "reminder"
+          ) {
             finalType = "reminder";
           } else if (
             (parsed.checklist && parsed.checklist.length > 0) ||

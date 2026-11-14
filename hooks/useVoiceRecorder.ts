@@ -4,16 +4,25 @@ import { useState, useRef, useEffect, useCallback } from "react";
 
 interface SpeechRecognitionResultItem {
   transcript: string;
+  confidence?: number;
 }
+
+interface SpeechRecognitionResult {
+  isFinal: boolean;
+  length: number;
+  [index: number]: SpeechRecognitionResultItem;
+}
+
 interface SpeechRecognitionResultList {
   length: number;
-  [index: number]: {
-    [index: number]: SpeechRecognitionResultItem;
-  };
+  [index: number]: SpeechRecognitionResult;
 }
+
 interface BrowserSpeechEvent extends Event {
+  resultIndex: number;
   results: SpeechRecognitionResultList;
 }
+
 interface BrowserSpeechRecognition extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
@@ -22,7 +31,7 @@ interface BrowserSpeechRecognition extends EventTarget {
   stop: () => void;
   abort: () => void;
   onresult: ((event: BrowserSpeechEvent) => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event: Event & { error?: string }) => void) | null;
   onend: (() => void) | null;
 }
 
@@ -33,6 +42,43 @@ export interface RecordingResult {
   browserTranscript: string;
 }
 
+/**
+ * Intelligent transcript merger that eliminates duplication across SpeechRecognition
+ * restarts and interim/final transitions, especially on Android Chrome.
+ */
+function mergeTranscripts(existing: string, incoming: string): string {
+  const ext = existing.trim();
+  const inc = incoming.trim();
+  if (!ext) return inc;
+  if (!inc) return ext;
+
+  // Exact match or one completely encompasses the other
+  if (ext.toLowerCase() === inc.toLowerCase()) return ext;
+  if (ext.toLowerCase().endsWith(inc.toLowerCase())) return ext;
+  if (inc.toLowerCase().startsWith(ext.toLowerCase())) return inc;
+
+  const extWords = ext.split(/\s+/);
+  const incWords = inc.split(/\s+/);
+  const maxOverlap = Math.min(extWords.length, incWords.length);
+
+  for (let overlap = maxOverlap; overlap > 0; overlap--) {
+    const extSuffix = extWords
+      .slice(extWords.length - overlap)
+      .join(" ")
+      .toLowerCase();
+    const incPrefix = incWords
+      .slice(0, overlap)
+      .join(" ")
+      .toLowerCase();
+
+    if (extSuffix === incPrefix) {
+      return `${ext} ${incWords.slice(overlap).join(" ")}`.trim();
+    }
+  }
+
+  return `${ext} ${inc}`.trim();
+}
+
 export function useVoiceRecorder() {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -41,6 +87,8 @@ export function useVoiceRecorder() {
   const [error, setError] = useState<string | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
 
+  const isRecordingRef = useRef<boolean>(false);
+  const isStoppingRef = useRef<boolean>(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -48,14 +96,16 @@ export function useVoiceRecorder() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const accumulatedFinalTranscriptRef = useRef<string>("");
   const speechTranscriptRef = useRef<string>("");
-  const sessionTranscriptRef = useRef<string>("");
   const startTimeRef = useRef<number>(0);
   const elapsedTimeRef = useRef<number>(0);
 
   // Clean up on unmount
   useEffect(() => {
     return () => {
+      isStoppingRef.current = true;
+      isRecordingRef.current = false;
       if (timerRef.current) clearInterval(timerRef.current);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
@@ -67,8 +117,11 @@ export function useVoiceRecorder() {
       if (speechRecognitionRef.current) {
         try {
           speechRecognitionRef.current.onend = null;
+          speechRecognitionRef.current.onerror = null;
+          speechRecognitionRef.current.onresult = null;
           speechRecognitionRef.current.stop();
         } catch {}
+        speechRecognitionRef.current = null;
       }
     };
   }, []);
@@ -78,10 +131,12 @@ export function useVoiceRecorder() {
     audioChunksRef.current = [];
     setDuration(0);
     setLiveTranscript("");
+    accumulatedFinalTranscriptRef.current = "";
     speechTranscriptRef.current = "";
-    sessionTranscriptRef.current = "";
     startTimeRef.current = Date.now();
     elapsedTimeRef.current = 0;
+    isStoppingRef.current = false;
+    isRecordingRef.current = true;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -96,7 +151,8 @@ export function useVoiceRecorder() {
       // Setup Web Audio API Analyser for live waveform visualization
       const AudioContextClass =
         window.AudioContext ||
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
       if (!AudioContextClass) {
         throw new Error("Web Audio API is not supported in this browser.");
       }
@@ -109,7 +165,7 @@ export function useVoiceRecorder() {
       analyserRef.current = analyserNode;
       setAnalyser(analyserNode);
 
-      // Setup in-browser Web Speech API transcription (Chrome on Android, Chrome Desktop, Safari, Edge)
+      // Setup in-browser Web Speech API transcription (Chrome Android, Chrome Desktop, Safari, Edge)
       const win = window as unknown as {
         SpeechRecognition?: new () => BrowserSpeechRecognition;
         webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
@@ -125,31 +181,57 @@ export function useVoiceRecorder() {
           recognition.lang = "en-US";
 
           recognition.onresult = (event: BrowserSpeechEvent) => {
-            let currentText = "";
-            for (let i = 0; i < event.results.length; i++) {
-              currentText += event.results[i][0].transcript + " ";
+            if (!isRecordingRef.current || isStoppingRef.current) return;
+
+            let interimText = "";
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              const res = event.results[i];
+              const text = res[0]?.transcript || "";
+              if (res.isFinal) {
+                accumulatedFinalTranscriptRef.current = mergeTranscripts(
+                  accumulatedFinalTranscriptRef.current,
+                  text
+                );
+              } else {
+                interimText += text;
+              }
             }
-            const clean = currentText.trim();
-            const combined = sessionTranscriptRef.current
-              ? `${sessionTranscriptRef.current} ${clean}`.trim()
-              : clean;
-            speechTranscriptRef.current = combined;
-            setLiveTranscript(combined);
+
+            const currentDisplay = mergeTranscripts(
+              accumulatedFinalTranscriptRef.current,
+              interimText
+            );
+            speechTranscriptRef.current = currentDisplay;
+            setLiveTranscript(currentDisplay);
           };
 
           recognition.onerror = () => {
-            // Non-fatal, continue with audio recording
+            // Non-fatal error (e.g. no-speech, audio-capture). Continue recording with MediaRecorder.
           };
 
-          // On mobile Android Chrome, recognition pauses after brief silence; restart automatically while recording
+          // On mobile Android Chrome, recognition pauses after brief silence; restart automatically while actively recording
           recognition.onend = () => {
-            if (speechTranscriptRef.current) {
-              sessionTranscriptRef.current = speechTranscriptRef.current;
+            if (!isRecordingRef.current || isStoppingRef.current) {
+              return;
             }
-            if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+
+            // Lock in current text before restart so nothing is lost
+            if (speechTranscriptRef.current) {
+              accumulatedFinalTranscriptRef.current = mergeTranscripts(
+                accumulatedFinalTranscriptRef.current,
+                speechTranscriptRef.current
+              );
+            }
+
+            if (
+              mediaRecorderRef.current &&
+              mediaRecorderRef.current.state === "recording"
+            ) {
               try {
                 recognition.start();
-              } catch {}
+              } catch {
+                // Ignore transient restart restrictions
+              }
             }
           };
 
@@ -163,7 +245,10 @@ export function useVoiceRecorder() {
       // Select supported audio mime type safely across desktop and mobile (iOS Safari / Android Chrome)
       let mimeType = "";
       try {
-        if (typeof MediaRecorder !== "undefined" && typeof MediaRecorder.isTypeSupported === "function") {
+        if (
+          typeof MediaRecorder !== "undefined" &&
+          typeof MediaRecorder.isTypeSupported === "function"
+        ) {
           if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
             mimeType = "audio/webm;codecs=opus";
           } else if (MediaRecorder.isTypeSupported("audio/webm")) {
@@ -188,7 +273,6 @@ export function useVoiceRecorder() {
         }
       };
 
-      // Set accurate start timestamp right when recording officially starts
       startTimeRef.current = Date.now();
       elapsedTimeRef.current = 0;
 
@@ -206,6 +290,7 @@ export function useVoiceRecorder() {
         }
       }, 250);
     } catch (err: unknown) {
+      isRecordingRef.current = false;
       const isNotAllowed = err instanceof Error && err.name === "NotAllowedError";
       const message = err instanceof Error ? err.message : String(err);
       setError(
@@ -242,6 +327,9 @@ export function useVoiceRecorder() {
 
   const stopRecording = useCallback((): Promise<RecordingResult | null> => {
     return new Promise((resolve) => {
+      isStoppingRef.current = true;
+      isRecordingRef.current = false;
+
       if (timerRef.current) clearInterval(timerRef.current);
 
       let totalMs = elapsedTimeRef.current;
@@ -250,11 +338,15 @@ export function useVoiceRecorder() {
       }
       const calculatedDuration = Math.max(1, Math.round(totalMs / 1000));
 
+      // Terminate speech recognition immediately and detach listeners so it NEVER restarts
       if (speechRecognitionRef.current) {
         try {
           speechRecognitionRef.current.onend = null;
+          speechRecognitionRef.current.onerror = null;
+          speechRecognitionRef.current.onresult = null;
           speechRecognitionRef.current.stop();
         } catch {}
+        speechRecognitionRef.current = null;
       }
 
       if (
@@ -263,20 +355,16 @@ export function useVoiceRecorder() {
       ) {
         setIsRecording(false);
         setIsPaused(false);
+        isStoppingRef.current = false;
         resolve(null);
         return;
       }
 
-      // Flush final audio buffer before stopping
-      if (mediaRecorderRef.current.state === "recording") {
-        try {
-          mediaRecorderRef.current.requestData();
-        } catch {}
-      }
-
       mediaRecorderRef.current.onstop = () => {
-        const mimeType = mediaRecorderRef.current?.mimeType || "audio/webm";
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        const rawMime = mediaRecorderRef.current?.mimeType || "audio/webm";
+        // Strip codec parameter to prevent Whisper API format rejection
+        const baseMime = rawMime.split(";")[0].trim() || "audio/webm";
+        const blob = new Blob(audioChunksRef.current, { type: baseMime });
         const url = URL.createObjectURL(blob);
         const finalTranscript = speechTranscriptRef.current.trim();
 
@@ -296,6 +384,8 @@ export function useVoiceRecorder() {
 
         setIsRecording(false);
         setIsPaused(false);
+        isStoppingRef.current = false;
+
         resolve({
           blob,
           duration: calculatedDuration,
@@ -309,12 +399,18 @@ export function useVoiceRecorder() {
   }, []);
 
   const cancelRecording = useCallback(() => {
+    isStoppingRef.current = true;
+    isRecordingRef.current = false;
+
     if (timerRef.current) clearInterval(timerRef.current);
     if (speechRecognitionRef.current) {
       try {
         speechRecognitionRef.current.onend = null;
-        speechRecognitionRef.current.stop();
+        speechRecognitionRef.current.onerror = null;
+        speechRecognitionRef.current.onresult = null;
+        speechRecognitionRef.current.abort();
       } catch {}
+      speechRecognitionRef.current = null;
     }
     if (
       mediaRecorderRef.current &&
@@ -336,8 +432,10 @@ export function useVoiceRecorder() {
     elapsedTimeRef.current = 0;
     setIsRecording(false);
     setIsPaused(false);
+    isStoppingRef.current = false;
     setDuration(0);
     setLiveTranscript("");
+    accumulatedFinalTranscriptRef.current = "";
     speechTranscriptRef.current = "";
   }, []);
 
