@@ -7,11 +7,14 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 
 interface NotificationWatcherProps {
-  userId: Id<"users">;
+  userId?: Id<"users"> | null;
 }
 
 export function NotificationWatcher({ userId }: NotificationWatcherProps) {
-  const activeReminders = useQuery(api.items.listActiveReminders, { userId });
+  const activeReminders = useQuery(
+    api.items.listActiveReminders,
+    userId ? { userId } : "skip"
+  );
   const markNotified = useMutation(api.items.markNotified);
   const toggleReminderStatus = useMutation(api.items.toggleReminderStatus);
   const snoozeReminder = useMutation(api.items.snoozeReminder);

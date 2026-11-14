@@ -75,7 +75,7 @@ export default function DashboardPage() {
   // Real-time items subscription for authenticated user
   const rawItems = useQuery(
     api.items.listByUser,
-    user ? { userId: user._id as Id<"users"> } : "skip"
+    user?._id ? { userId: user._id as Id<"users"> } : "skip"
   );
 
   // Available tags extracted dynamically
@@ -199,7 +199,7 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-zinc-50/60 pb-20 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50">
       {/* Background Reminder Alert Engine */}
-      {user && <NotificationWatcher userId={user._id as Id<"users">} />}
+      {user?._id && <NotificationWatcher userId={user._id as Id<"users">} />}
 
       {/* Top Navbar */}
       <header className="sticky top-0 z-40 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md dark:border-zinc-800/80 dark:bg-zinc-900/80">
@@ -307,7 +307,7 @@ export default function DashboardPage() {
           </div>
         ) : activeTab === "reminder" ? (
           /* Dedicated Tab-Based Smart Reminder Dashboard */
-          user && (
+          user?._id ? (
             <TabBasedReminderDashboard
               userId={user._id as Id<"users">}
               currentTime={currentTime}
@@ -315,12 +315,12 @@ export default function DashboardPage() {
               selectedTag={selectedTag}
               onEdit={setEditingItem}
             />
-          )
+          ) : null
         ) : (
           /* Multi-type Dashboard Grid (All / Note / List) */
           <div className="space-y-6 sm:space-y-8">
             {/* Tab-Based Reminders Section (Only on "All" tab when reminders exist) */}
-            {activeTab === "all" && user && (
+            {activeTab === "all" && user?._id && (
               <TabBasedReminderDashboard
                 userId={user._id as Id<"users">}
                 currentTime={currentTime}
