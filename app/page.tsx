@@ -13,9 +13,19 @@ import { FilterBar } from "@/components/FilterBar";
 import { EditItemDialog } from "@/components/EditItemDialog";
 import { NotificationWatcher } from "@/components/NotificationWatcher";
 import { StructuredItemData } from "@/components/ItemPreviewDialog";
+import { SmartReminderSections } from "@/components/SmartReminderSections";
 import { Button } from "@/components/ui/button";
-import { isDateToday } from "@/lib/date-utils";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -24,16 +34,25 @@ export default function DashboardPage() {
 
   // Filter & Search states
   const [activeTab, setActiveTab] = useState<"all" | "note" | "reminder" | "list">("all");
+  const [reminderSubFilter, setReminderSubFilter] = useState<"all" | "upcoming" | "overdue" | "completed">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<ItemRecord | null>(null);
+
+  // Real-time ticker to transition upcoming reminders to overdue dynamically as time passes
   const [currentTime, setCurrentTime] = useState(0);
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setCurrentTime(Date.now());
     }, 0);
-    return () => clearTimeout(timer);
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 10000);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
   }, []);
 
   // Convex mutations
@@ -96,7 +115,7 @@ export default function DashboardPage() {
     });
   }, [rawItems, activeTab, selectedTag, searchQuery]);
 
-  // Counts for tabs
+  // Counts for main filter tabs
   const counts = useMemo(() => {
     if (!rawItems) return { all: 0, note: 0, reminder: 0, list: 0 };
     return {
@@ -107,33 +126,59 @@ export default function DashboardPage() {
     };
   }, [rawItems]);
 
-  // Today's Reminders (due today or overdue pending, sorted chronologically ascending)
-  const todayReminders = useMemo(() => {
+  // 1. Upcoming Reminders:
+  // Scheduled due time is strictly in the future (dueDate > currentTime) and NOT completed.
+  // Sorted nearest upcoming first (chronological ascending order).
+  const upcomingReminders = useMemo(() => {
     return filteredItems
       .filter(
         (i) =>
           i.type === "reminder" &&
+          i.reminderStatus !== "completed" &&
           i.dueDate &&
-          (isDateToday(i.dueDate) ||
-            (i.reminderStatus !== "completed" && currentTime > 0 && i.dueDate < currentTime))
+          (currentTime === 0 || i.dueDate > currentTime)
       )
       .sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
   }, [filteredItems, currentTime]);
 
-  const todayReminderIds = useMemo(() => {
-    return new Set(todayReminders.map((i) => i._id));
-  }, [todayReminders]);
+  // 2. Pending / Overdue Reminders:
+  // Scheduled due time has arrived or passed (dueDate <= currentTime) and NOT completed.
+  // Sorted oldest overdue first (chronological ascending order).
+  const overdueReminders = useMemo(() => {
+    if (currentTime === 0) return [];
+    return filteredItems
+      .filter(
+        (i) =>
+          i.type === "reminder" &&
+          i.reminderStatus !== "completed" &&
+          (!i.dueDate || i.dueDate <= currentTime)
+      )
+      .sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
+  }, [filteredItems, currentTime]);
 
-  // Pinned items (excluding today's reminders to avoid duplication)
-  const pinnedItems = useMemo(
-    () => filteredItems.filter((i) => i.isPinned && !todayReminderIds.has(i._id)),
-    [filteredItems, todayReminderIds]
+  // 3. Completed Reminders:
+  // Marked completed (reminderStatus === "completed"). Never shown in upcoming or pending.
+  // Sorted most recently completed first (descending).
+  const completedReminders = useMemo(() => {
+    return filteredItems
+      .filter((i) => i.type === "reminder" && i.reminderStatus === "completed")
+      .sort(
+        (a, b) =>
+          ((b as unknown as { updatedAt?: number }).updatedAt || b.dueDate || 0) -
+          ((a as unknown as { updatedAt?: number }).updatedAt || a.dueDate || 0)
+      );
+  }, [filteredItems]);
+
+  // Pinned non-reminders (notes & lists)
+  const pinnedNonReminders = useMemo(
+    () => filteredItems.filter((i) => i.isPinned && i.type !== "reminder"),
+    [filteredItems]
   );
 
-  // Other items (excluding today's reminders and pinned items)
-  const regularItems = useMemo(
-    () => filteredItems.filter((i) => !i.isPinned && !todayReminderIds.has(i._id)),
-    [filteredItems, todayReminderIds]
+  // Regular non-reminders (notes & lists)
+  const regularNonReminders = useMemo(
+    () => filteredItems.filter((i) => !i.isPinned && i.type !== "reminder"),
+    [filteredItems]
   );
 
   // Save new item handler (with audio upload if recorded)
@@ -193,6 +238,11 @@ export default function DashboardPage() {
       </div>
     );
   }
+
+  const hasAnyReminders =
+    upcomingReminders.length > 0 ||
+    overdueReminders.length > 0 ||
+    completedReminders.length > 0;
 
   return (
     <div className="min-h-screen bg-zinc-50/60 pb-20 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50">
@@ -303,8 +353,35 @@ export default function DashboardPage() {
               />
             ))}
           </div>
+        ) : activeTab === "reminder" ? (
+          /* Standalone Smart Reminders Dashboard */
+          filteredItems.length === 0 && searchQuery ? (
+            <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 py-16 text-center dark:border-zinc-800">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400 text-2xl">
+                🔍
+              </div>
+              <h3 className="mt-4 text-base font-bold text-zinc-900 dark:text-zinc-100">
+                No reminders match &ldquo;{searchQuery}&rdquo;
+              </h3>
+              <p className="mt-1 text-xs text-zinc-500 max-w-sm">
+                Try adjusting your search terms or clearing selected tags.
+              </p>
+            </div>
+          ) : (
+            <SmartReminderSections
+              upcoming={upcomingReminders as ItemRecord[]}
+              overdue={overdueReminders as ItemRecord[]}
+              completed={completedReminders as ItemRecord[]}
+              onEdit={setEditingItem}
+              activeSubFilter={reminderSubFilter}
+              onSubFilterChange={setReminderSubFilter}
+              searchQuery={searchQuery}
+              isStandaloneView={true}
+              hideEmptySections={false}
+            />
+          )
         ) : filteredItems.length === 0 ? (
-          /* Empty State */
+          /* Empty State for All / Note / List */
           <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 py-16 text-center dark:border-zinc-800">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 text-2xl">
               🎙️
@@ -321,47 +398,29 @@ export default function DashboardPage() {
             </p>
           </div>
         ) : (
-          /* Items Grid */
-          <div className="space-y-6">
-            {/* Today's Reminders (High Priority at Top) */}
-            {todayReminders.length > 0 && (
-              <div className="space-y-3 rounded-2xl border border-amber-200/90 bg-amber-50/50 p-3 sm:p-4 shadow-xs dark:border-amber-900/50 dark:bg-amber-950/20">
-                <div className="flex items-center justify-between border-b border-amber-200/60 pb-2.5 dark:border-amber-900/40">
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500 text-white shadow-xs text-sm">
-                      🔔
-                    </span>
-                    <h2 className="text-sm font-bold tracking-tight text-amber-950 dark:text-amber-100">
-                      Today&apos;s Reminders
-                    </h2>
-                    <span className="rounded-full bg-amber-200/80 px-2.5 py-0.5 text-xs font-bold text-amber-900 dark:bg-amber-900/80 dark:text-amber-200 font-mono">
-                      {todayReminders.length}
-                    </span>
-                  </div>
-                  <span className="text-[11px] font-medium text-amber-700/80 dark:text-amber-300/80">
-                    Sorted by time
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 pt-1">
-                  {todayReminders.map((item) => (
-                    <ItemCard
-                      key={item._id}
-                      item={item as ItemRecord}
-                      onEdit={setEditingItem}
-                    />
-                  ))}
-                </div>
-              </div>
+          /* Multi-type Dashboard Grid */
+          <div className="space-y-6 sm:space-y-8">
+            {/* 1. Smart Reminder Sections (Upcoming, Overdue, and Completed) */}
+            {activeTab === "all" && hasAnyReminders && (
+              <SmartReminderSections
+                upcoming={upcomingReminders as ItemRecord[]}
+                overdue={overdueReminders as ItemRecord[]}
+                completed={completedReminders as ItemRecord[]}
+                onEdit={setEditingItem}
+                searchQuery={searchQuery}
+                isStandaloneView={false}
+                hideEmptySections={true}
+              />
             )}
 
-            {/* Pinned Items */}
-            {pinnedItems.length > 0 && (
+            {/* 2. Pinned Items (Notes & Lists) */}
+            {pinnedNonReminders.length > 0 && (
               <div className="space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
-                  📌 Pinned Items ({pinnedItems.length})
+                  📌 Pinned Items ({pinnedNonReminders.length})
                 </h2>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {pinnedItems.map((item) => (
+                  {pinnedNonReminders.map((item) => (
                     <ItemCard
                       key={item._id}
                       item={item as ItemRecord}
@@ -372,16 +431,20 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {/* Other Items */}
-            {regularItems.length > 0 && (
+            {/* 3. Regular Items (Notes & Lists) */}
+            {regularNonReminders.length > 0 && (
               <div className="space-y-3">
-                {(todayReminders.length > 0 || pinnedItems.length > 0) && (
+                {(hasAnyReminders || pinnedNonReminders.length > 0) && (
                   <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                    All Other Items ({regularItems.length})
+                    {activeTab === "note"
+                      ? `Notes (${regularNonReminders.length})`
+                      : activeTab === "list"
+                        ? `Lists (${regularNonReminders.length})`
+                        : `Notes & Lists (${regularNonReminders.length})`}
                   </h2>
                 )}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {regularItems.map((item) => (
+                  {regularNonReminders.map((item) => (
                     <ItemCard
                       key={item._id}
                       item={item as ItemRecord}
