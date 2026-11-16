@@ -14,6 +14,7 @@ import { EditItemDialog } from "@/components/EditItemDialog";
 import { NotificationWatcher } from "@/components/NotificationWatcher";
 import { StructuredItemData } from "@/components/ItemPreviewDialog";
 import { TabBasedReminderDashboard } from "@/components/TabBasedReminderDashboard";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -240,7 +241,8 @@ export default function DashboardPage() {
           </div>
 
           {/* User profile & actions */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <ThemeToggle />
             {user && (
               <div className="hidden sm:flex flex-col text-right">
                 <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
