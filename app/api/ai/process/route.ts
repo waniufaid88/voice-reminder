@@ -7,11 +7,14 @@ import {
 } from "@/lib/natural-date-parser";
 import { parseLocalDatetime } from "@/lib/date-utils";
 
+const GROQ_API_URL = "https://api.groq.com/openai/v1";
+const GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3-turbo";
+const GROQ_CHAT_MODEL = "llama-3.3-70b-versatile";
+
 /**
- * Normalizes audio MIME types and file extensions for OpenAI Whisper compatibility.
- * Strips codecs parameters (e.g. "audio/webm;codecs=opus" -> "audio/webm").
+ * Normalize audio MIME types and extensions for Groq transcription.
  */
-function getWhisperMimeAndExt(
+function getGroqMimeAndExt(
   rawMime: string,
   originalName?: string
 ): { mime: string; ext: string } {
@@ -51,25 +54,20 @@ function getWhisperMimeAndExt(
     return { mime: "audio/flac", ext: "recording.flac" };
   }
 
-  // Standard fallback for Android Chrome MediaRecorder.
+  // Android Chrome commonly records WebM/Opus.
   return { mime: "audio/webm", ext: "recording.webm" };
 }
 
 /**
- * Detects explicit list-creation or list-management intent.
+ * Detect explicit list-creation or list-management intent.
  *
- * IMPORTANT:
- * - Commas are not list indicators.
- * - The word "and" is not a list indicator.
- * - Multiple subjects or goals do not automatically create lists.
+ * Commas and the word "and" do not automatically mean a list.
  */
 function hasExplicitListIntent(rawText: string): boolean {
   const text = rawText.toLowerCase().trim();
 
   // Direct shopping or purchasing instructions.
-  if (
-    /^(?:please\s+)?(?:buy|purchase|pick up)\b/.test(text)
-  ) {
+  if (/^(?:please\s+)?(?:buy|purchase|pick up)\b/.test(text)) {
     return true;
   }
 
@@ -82,16 +80,13 @@ function hasExplicitListIntent(rawText: string): boolean {
     return true;
   }
 
-  // Explicitly create a list of items.
   if (
-    /\b(?:make|create|prepare)\s+(?:a\s+)?list\s+of\b/.test(
-      text
-    )
+    /\b(?:make|create|prepare)\s+(?:a\s+)?list\s+of\b/.test(text)
   ) {
     return true;
   }
 
-  // Add items to an existing list or checklist.
+  // Add items to an existing list.
   if (
     /\b(?:add|put|include)\b.*\b(?:to|in|on)\s+(?:(?:my|the)\s+)?(?:(?:shopping|grocery|packing|todo|to-do|task)\s+)?(?:list|checklist)\b/.test(
       text
@@ -100,7 +95,6 @@ function hasExplicitListIntent(rawText: string): boolean {
     return true;
   }
 
-  // Explicitly request a checklist.
   if (
     /\b(?:make|create|prepare)\s+(?:me\s+)?(?:a\s+)?checklist\b/.test(
       text
@@ -113,7 +107,7 @@ function hasExplicitListIntent(rawText: string): boolean {
 }
 
 /**
- * Rule-based text extractor.
+ * Rule-based fallback when Groq chat is unavailable.
  *
  * Priority:
  * 1. Reminder
@@ -131,7 +125,6 @@ function parseTextRuleBased(
     clientTimezoneOffset
   );
 
-  // Reminder intent always takes priority.
   if (natural.isReminder || natural.dueDate) {
     return {
       type: "reminder" as const,
@@ -150,7 +143,6 @@ function parseTextRuleBased(
     };
   }
 
-  // Only explicit list intentions create lists.
   if (hasExplicitListIntent(rawText)) {
     const listInfo = generateSmartListInfo(rawText);
 
@@ -168,7 +160,6 @@ function parseTextRuleBased(
     };
   }
 
-  // Default to Note.
   const noteInfo = generateSmartNoteInfo(rawText);
 
   return {
@@ -186,7 +177,7 @@ function parseTextRuleBased(
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const groqApiKey = process.env.GROQ_API_KEY?.trim();
   const contentType = req.headers.get("content-type") || "";
 
   let rawText = "";
@@ -195,7 +186,10 @@ export async function POST(req: NextRequest) {
   let clientTimezoneOffset: number | undefined = undefined;
   let clientNowISO = "";
   let clientNowLocal = "";
-  let whisperErrorDetail: string | null = null;
+  let transcriptionError: string | null = null;
+
+  let usedGroqTranscription = false;
+  let usedGroqStructuring = false;
 
   try {
     // --------------------------------------------------
@@ -226,21 +220,24 @@ export async function POST(req: NextRequest) {
         }
       }
 
-
       if (audioFile) {
-        if (!apiKey) {
-          whisperErrorDetail =
-            "OPENAI_API_KEY environment variable is not configured on the server.";
-          console.warn("[/api/ai/process]", whisperErrorDetail);
+        if (!groqApiKey) {
+          transcriptionError =
+            "GROQ_API_KEY environment variable is not configured.";
+
+          console.warn("[/api/ai/process]", transcriptionError);
 
           if (fallbackText.trim()) {
             rawText = fallbackText.trim();
           }
         } else {
-          // Send audio to OpenAI Whisper API.
+          // ----------------------------------------------
+          // STEP 1A: Transcribe audio using Groq.
+          // ----------------------------------------------
+
           try {
             const { mime: cleanMime, ext: cleanExt } =
-              getWhisperMimeAndExt(
+              getGroqMimeAndExt(
                 audioFile.type,
                 (audioFile as File).name
               );
@@ -248,21 +245,25 @@ export async function POST(req: NextRequest) {
             const arrayBuffer = await audioFile.arrayBuffer();
             const audioBytes = new Uint8Array(arrayBuffer);
 
-            console.log("[/api/ai/process] Audio file received:", {
-              type: audioFile.type,
-              cleanMime,
-              cleanExt,
+            console.log("[/api/ai/process] Audio received:", {
+              originalType: audioFile.type,
+              uploadType: cleanMime,
+              filename: cleanExt,
               sizeBytes: audioBytes.byteLength,
               fallbackTextLength: fallbackText.trim().length,
             });
 
             if (audioBytes.byteLength === 0) {
-              whisperErrorDetail =
-                "Audio recording file was 0 bytes (no audio stream captured).";
-              console.warn("[/api/ai/process]", whisperErrorDetail);
+              transcriptionError =
+                "Audio recording file is empty (0 bytes).";
 
-              if (fallbackText) {
-                rawText = fallbackText;
+              console.warn(
+                "[/api/ai/process]",
+                transcriptionError
+              );
+
+              if (fallbackText.trim()) {
+                rawText = fallbackText.trim();
               }
             } else {
               const fileToUpload = new File(
@@ -271,75 +272,102 @@ export async function POST(req: NextRequest) {
                 { type: cleanMime }
               );
 
-              const whisperFormData = new FormData();
-              whisperFormData.append("file", fileToUpload);
-              whisperFormData.append("model", "whisper-1");
-              whisperFormData.append("response_format", "json");
+              const transcriptionFormData = new FormData();
 
-              whisperFormData.append(
+              transcriptionFormData.append("file", fileToUpload);
+              transcriptionFormData.append(
+                "model",
+                GROQ_TRANSCRIPTION_MODEL
+              );
+              transcriptionFormData.append(
+                "response_format",
+                "json"
+              );
+              transcriptionFormData.append(
                 "prompt",
                 "Voice reminder, meeting, appointment, checklist, grocery list, task, note."
               );
 
-              const whisperRes = await fetch(
-                "https://api.openai.com/v1/audio/transcriptions",
+              const transcriptionRes = await fetch(
+                `${GROQ_API_URL}/audio/transcriptions`,
                 {
                   method: "POST",
                   headers: {
-                    Authorization: `Bearer ${apiKey}`,
+                    Authorization: `Bearer ${groqApiKey}`,
                   },
-                  body: whisperFormData,
+                  body: transcriptionFormData,
                 }
               );
 
-              if (whisperRes.ok) {
-                const whisperData = await whisperRes.json();
+              if (transcriptionRes.ok) {
+                const transcriptionData =
+                  await transcriptionRes.json();
 
-                const whisperText = (whisperData.text || "").trim();
+                const transcriptionText =
+                  (transcriptionData.text || "").trim();
 
-                // Filter common Whisper silence hallucinations.
+                // Filter common silence hallucinations.
                 const isHallucination =
                   /^(?:thanks for watching|thank you for watching|subscribe|you|bye|\.)\.?$/i.test(
-                    whisperText
+                    transcriptionText
                   );
 
-                if (whisperText && !isHallucination) {
-                  rawText = whisperText;
-                } else if (fallbackText) {
-                  rawText = fallbackText;
+                if (transcriptionText && !isHallucination) {
+                  rawText = transcriptionText;
+                  usedGroqTranscription = true;
+
+                  console.log(
+                    "[/api/ai/process] Groq transcription successful:",
+                    {
+                      transcriptLength: rawText.length,
+                    }
+                  );
+                } else if (fallbackText.trim()) {
+                  rawText = fallbackText.trim();
                 }
               } else {
-                const errJson = await whisperRes.json().catch(() => ({}));
-                const errMsg =
-                  errJson?.error?.message ||
-                  `OpenAI Whisper API responded with HTTP ${whisperRes.status} (${whisperRes.statusText})`;
-                whisperErrorDetail = errMsg;
+                const errorData = await transcriptionRes
+                  .json()
+                  .catch(() => ({}));
 
-                console.error("[/api/ai/process] Whisper API error:", {
-                  status: whisperRes.status,
-                  error: errJson,
-                });
+                transcriptionError =
+                  errorData?.error?.message ||
+                  `Groq transcription API responded with HTTP ${transcriptionRes.status}.`;
 
-                if (fallbackText) {
-                  rawText = fallbackText;
+                console.error(
+                  "[/api/ai/process] Groq transcription error:",
+                  {
+                    status: transcriptionRes.status,
+                    error: errorData,
+                  }
+                );
+
+                if (fallbackText.trim()) {
+                  rawText = fallbackText.trim();
                 }
               }
             }
-          } catch (whisperErr: unknown) {
-            const msg =
-              whisperErr instanceof Error
-                ? whisperErr.message
-                : String(whisperErr);
-            whisperErrorDetail = `Failed to contact OpenAI Whisper API: ${msg}`;
-            console.error("[/api/ai/process] Whisper request failed:", whisperErr);
+          } catch (transcriptionErr: unknown) {
+            const message =
+              transcriptionErr instanceof Error
+                ? transcriptionErr.message
+                : String(transcriptionErr);
 
-            if (fallbackText) {
-              rawText = fallbackText;
+            transcriptionError =
+              `Failed to contact Groq transcription API: ${message}`;
+
+            console.error(
+              "[/api/ai/process] Transcription request failed:",
+              transcriptionErr
+            );
+
+            if (fallbackText.trim()) {
+              rawText = fallbackText.trim();
             }
           }
         }
-      } else if (fallbackText) {
-        rawText = fallbackText;
+      } else if (fallbackText.trim()) {
+        rawText = fallbackText.trim();
       }
     } else {
       // Direct text input.
@@ -363,7 +391,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Use fallback text if transcription is empty or too short.
+    // Use browser transcript if audio transcription was empty.
     if (!rawText.trim() && fallbackText.trim()) {
       rawText = fallbackText.trim();
     } else if (
@@ -374,14 +402,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (!rawText.trim()) {
-      const errorMsg = whisperErrorDetail
-        ? `Audio transcription failed: ${whisperErrorDetail}`
+      const errorMessage = transcriptionError
+        ? `Audio transcription failed: ${transcriptionError}`
         : "No voice could be transcribed. Please speak clearly or check microphone permissions.";
 
       return NextResponse.json(
         {
-          error: errorMsg,
-          detail: whisperErrorDetail,
+          error: errorMessage,
+          detail: transcriptionError,
         },
         { status: 400 }
       );
@@ -404,17 +432,17 @@ export async function POST(req: NextRequest) {
     const explicitListIntent = hasExplicitListIntent(rawText);
 
     // --------------------------------------------------
-    // STEP 3: Structure input with GPT-4o-mini.
+    // STEP 3: Structure input using Groq chat API.
     // --------------------------------------------------
 
-    if (apiKey) {
+    if (groqApiKey) {
       try {
         const userLocalString =
           clientNowLocal || refDate.toLocaleString();
 
         const userTz = clientTimezone || "User Local Time";
 
-        // Calculate wall-clock date in user's timezone.
+        // Calculate wall-clock date in the user's timezone.
         const userWallClock =
           clientTimezoneOffset !== undefined
             ? new Date(
@@ -524,28 +552,18 @@ CRITICAL USER TIMEZONE CONTEXT:
 - Today in user's timezone is: ${todayDayName}, ${todayDateStr}
 - Tomorrow in user's timezone is: ${tomorrowDayName}, ${tomorrowDateStr}
 
-CRITICAL TITLE AND CONTENT RULES (MANDATORY):
+CRITICAL TITLE AND CONTENT RULES:
 The title and content MUST be completely different. Never use the complete original user sentence as the title.
 
 1. NOTES:
-- Generate a short, meaningful title (2-5 words) summarizing the main subject.
+- Generate a short, meaningful title (2-5 words).
 - Content should contain the complete note with its important details in well-written prose.
-
-Example:
-Input: "Today I discussed the new project with my team. We decided to finish it by Friday."
-Title: "Project Discussion"
-Content: "Discussed the new project with the team. The agreed deadline is Friday."
 
 2. REMINDERS:
 - Generate a short, actionable title (2-5 words).
 - Do NOT include unnecessary phrases like "I have to", "I need to", "I must", or "Remind me".
 - Never put the date/time inside the title if the title already explains the action.
-- Content should clearly explain what the user needs to do, preserving all important details and deadlines.
-
-Example:
-Input: "I have to call John tomorrow at 5 PM."
-Title: "Call John"
-Content: "Call John tomorrow at 5:00 PM."
+- Content should clearly explain what the user needs to do, preserving important details and deadlines.
 
 3. LISTS:
 - Generate a meaningful title describing the list.
@@ -553,26 +571,17 @@ Content: "Call John tomorrow at 5:00 PM."
 - Put individual items inside the checklist array.
 - NEVER duplicate checklist items inside the title.
 
-Example:
-Input: "Buy milk, bread and eggs."
-Title: "Grocery Shopping"
-Content: "Shopping items to purchase."
-Checklist:
-- Milk
-- Bread
-- Eggs
-
-Rules for reminder scheduling:
-- You MUST extract the EXACT time and day specified by the user.
+RULES FOR REMINDER SCHEDULING:
+- Extract the EXACT time and day specified by the user.
 - "4:30 pm" -> 16:30.
 - "at 10 am" -> 10:00.
 - "tomorrow at 5 pm" -> tomorrow at 17:00.
 - "on Friday at 2 pm" -> upcoming Friday at 14:00.
-- If only a time is mentioned and that time today is in the future in the user's timezone, set for today.
-- If only a time is mentioned and that time has already passed today, set for tomorrow.
-- Output "dueDateLocal" formatted strictly as "YYYY-MM-DDTHH:mm" (24-hour format in USER'S local time).
+- If only a time is mentioned and that time today is in the future, set for today.
+- If only a time is mentioned and that time has passed today, set for tomorrow.
+- Output "dueDateLocal" strictly as "YYYY-MM-DDTHH:mm" in USER'S local time.
 
-Recurrence rules:
+RECURRENCE RULES:
 - "daily", "every day", "everyday" -> "recurrenceMode": "daily".
 - "every weekday" -> "recurrenceMode": "custom", "recurrenceDays": [1,2,3,4,5].
 - "every weekend" -> "recurrenceMode": "custom", "recurrenceDays": [0,6].
@@ -580,11 +589,11 @@ Recurrence rules:
 - Day numbers are [0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat].
 - Otherwise "recurrenceMode": "once".
 
-Respond ONLY with valid JSON with this exact structure:
+Respond ONLY with valid JSON using this exact structure:
 {
   "type": "note" | "reminder" | "list",
-  "title": "Short descriptive title (2-5 words)",
-  "content": "Detailed, well-punctuated transcript or summary (different from title)",
+  "title": "Short descriptive title",
+  "content": "Detailed, well-punctuated content",
   "dueDateLocal": "YYYY-MM-DDTHH:mm" or null,
   "recurrenceMode": "once" | "daily" | "custom",
   "recurrenceDays": [1, 3] or null,
@@ -594,16 +603,16 @@ Respond ONLY with valid JSON with this exact structure:
   "tags": ["#tag1", "#tag2"]
 }`;
 
-        const gptRes = await fetch(
-          "https://api.openai.com/v1/chat/completions",
+        const groqRes = await fetch(
+          `${GROQ_API_URL}/chat/completions`,
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
+              Authorization: `Bearer ${groqApiKey}`,
             },
             body: JSON.stringify({
-              model: "gpt-4o-mini",
+              model: GROQ_CHAT_MODEL,
               response_format: { type: "json_object" },
               messages: [
                 { role: "system", content: systemPrompt },
@@ -617,21 +626,26 @@ Respond ONLY with valid JSON with this exact structure:
           }
         );
 
-        if (gptRes.ok) {
-          const gptData = await gptRes.json();
+        if (groqRes.ok) {
+          const groqData = await groqRes.json();
 
-          const parsed = JSON.parse(
-            gptData.choices[0].message.content
-          );
+          const messageContent =
+            groqData.choices?.[0]?.message?.content;
 
-          // --------------------------------------------------
+          if (!messageContent) {
+            throw new Error("Groq returned an empty response.");
+          }
+
+          const parsed = JSON.parse(messageContent);
+
+          usedGroqStructuring = true;
+
+          // ----------------------------------------------
           // STEP 4: Determine the final category.
-          // --------------------------------------------------
+          // ----------------------------------------------
 
           let finalType: "note" | "reminder" | "list" = "note";
 
-          // Only natural reminder detection can establish reminder intent.
-          // GPT's suggested category alone cannot override this.
           if (natural.isReminder || natural.dueDate) {
             finalType = "reminder";
           } else if (explicitListIntent) {
@@ -640,16 +654,18 @@ Respond ONLY with valid JSON with this exact structure:
             finalType = "note";
           }
 
-          // --------------------------------------------------
+          // ----------------------------------------------
           // STEP 5: Handle reminder dates.
-          // --------------------------------------------------
+          // ----------------------------------------------
 
           let finalDueDate: number | undefined = undefined;
           let dueDateLocal: string | undefined = undefined;
 
           if (finalType === "reminder") {
             dueDateLocal =
-              parsed.dueDateLocal || natural.dueDateLocal || undefined;
+              parsed.dueDateLocal ||
+              natural.dueDateLocal ||
+              undefined;
 
             if (parsed.dueDateLocal) {
               try {
@@ -658,11 +674,14 @@ Respond ONLY with valid JSON with this exact structure:
                   clientTimezoneOffset
                 );
               } catch (dateError) {
-                console.warn("GPT date parsing error:", dateError);
+                console.warn(
+                  "[/api/ai/process] Groq date parsing error:",
+                  dateError
+                );
               }
             }
 
-            // If GPT did not provide a valid date, use the natural parser.
+            // Use natural parser if Groq did not provide a valid date.
             if (
               (!finalDueDate || !Number.isFinite(finalDueDate)) &&
               natural.dueDate
@@ -692,14 +711,13 @@ Respond ONLY with valid JSON with this exact structure:
               natural.recurrenceDays
               : undefined;
 
-          // --------------------------------------------------
+          // ----------------------------------------------
           // STEP 6: Prepare title and content.
-          // --------------------------------------------------
+          // ----------------------------------------------
 
           let finalTitle = parsed.title?.trim() || "";
           let finalContent = parsed.content?.trim() || "";
 
-          // Ensure title and content are distinct and title is concise.
           if (
             !finalTitle ||
             finalTitle.toLowerCase() === finalContent.toLowerCase() ||
@@ -710,7 +728,8 @@ Respond ONLY with valid JSON with this exact structure:
 
               if (
                 !finalContent ||
-                finalContent.toLowerCase() === finalTitle.toLowerCase()
+                finalContent.toLowerCase() ===
+                finalTitle.toLowerCase()
               ) {
                 finalContent = cleanReminderContent(rawText);
               }
@@ -721,7 +740,8 @@ Respond ONLY with valid JSON with this exact structure:
 
               if (
                 !finalContent ||
-                finalContent.toLowerCase() === finalTitle.toLowerCase()
+                finalContent.toLowerCase() ===
+                finalTitle.toLowerCase()
               ) {
                 finalContent = listInfo.content;
               }
@@ -732,14 +752,14 @@ Respond ONLY with valid JSON with this exact structure:
 
               if (
                 !finalContent ||
-                finalContent.toLowerCase() === finalTitle.toLowerCase()
+                finalContent.toLowerCase() ===
+                finalTitle.toLowerCase()
               ) {
                 finalContent = noteInfo.content;
               }
             }
           }
 
-          // Final fallback for missing titles or content.
           if (!finalTitle) {
             if (finalType === "reminder") {
               finalTitle = natural.title;
@@ -760,9 +780,9 @@ Respond ONLY with valid JSON with this exact structure:
             }
           }
 
-          // --------------------------------------------------
+          // ----------------------------------------------
           // STEP 7: Prepare checklist and tags.
-          // --------------------------------------------------
+          // ----------------------------------------------
 
           let finalChecklist = undefined;
 
@@ -788,7 +808,12 @@ Respond ONLY with valid JSON with this exact structure:
 
           return NextResponse.json({
             success: true,
-            usedOpenAI: true,
+            usedGroq: true,
+            usedGroqTranscription,
+            usedGroqStructuring,
+            // Retain this field for compatibility with clients
+            // that may still read the old property.
+            usedOpenAI: false,
             rawTranscript: rawText,
             type: finalType,
             title: finalTitle,
@@ -803,16 +828,23 @@ Respond ONLY with valid JSON with this exact structure:
             tags: finalTags,
           });
         } else {
-          const errorData = await gptRes.json().catch(() => ({}));
-          console.warn("GPT API error:", errorData);
+          const errorData = await groqRes.json().catch(() => ({}));
+
+          console.warn("[/api/ai/process] Groq chat API error:", {
+            status: groqRes.status,
+            error: errorData,
+          });
         }
-      } catch (gptErr) {
-        console.warn("GPT structuring error:", gptErr);
+      } catch (groqErr) {
+        console.warn(
+          "[/api/ai/process] Groq structuring error:",
+          groqErr
+        );
       }
     }
 
     // --------------------------------------------------
-    // STEP 8: Fallback if GPT is unavailable.
+    // STEP 8: Rule-based fallback if Groq is unavailable.
     // --------------------------------------------------
 
     const structured = parseTextRuleBased(
@@ -823,8 +855,11 @@ Respond ONLY with valid JSON with this exact structure:
 
     return NextResponse.json({
       success: true,
+      usedGroq: false,
+      usedGroqTranscription,
+      usedGroqStructuring: false,
       usedOpenAI: false,
-      isQuotaExhausted: true,
+      isQuotaExhausted: false,
       rawTranscript: rawText,
       ...structured,
     });
@@ -833,6 +868,8 @@ Respond ONLY with valid JSON with this exact structure:
       error instanceof Error
         ? error.message
         : "Failed to process audio/text.";
+
+    console.error("[/api/ai/process] Unexpected error:", error);
 
     return NextResponse.json(
       { error: message },
