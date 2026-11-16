@@ -10,6 +10,7 @@ import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { WaveformVisualizer } from "./WaveformVisualizer";
 import { ItemPreviewDialog, StructuredItemData } from "./ItemPreviewDialog";
 import { Button } from "@/components/ui/button";
+
 import {
   parseNaturalReminder,
   cleanReminderContent,
@@ -31,10 +32,57 @@ interface SmartCaptureBarProps {
   onSaveItem: (data: StructuredItemData) => Promise<void>;
 }
 
+/**
+ * Detects actual checklist/shopping intent.
+ *
+ * Important:
+ * A comma or the word "and" alone does NOT mean a checklist.
+ */
+function isExplicitListRequest(text: string): boolean {
+  const normalized = text.toLowerCase().trim();
+
+  const explicitListPatterns = [
+    /\b(?:make|create|prepare|write|show)\s+(?:me\s+)?(?:a\s+)?(?:shopping\s+|grocery\s+|to[- ]?do\s+)?list\b/i,
+    /\b(?:shopping|grocery|check|to[- ]?do)\s+list\b/i,
+    /\bchecklist\b/i,
+    /\badd\s+.+\s+to\s+(?:my|the)\s+list\b/i,
+    /\bput\s+.+\s+on\s+(?:my|the)\s+list\b/i,
+  ];
+
+  if (explicitListPatterns.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+
+  // Examples:
+  // "I need to buy a laptop and mouse."
+  // "I have to purchase milk and eggs."
+  // "I want to get a new keyboard."
+  const buyingIntentPattern =
+    /\b(?:need|have|want|would like|should|must)\s+to\s+(?:buy|purchase|get|pick up)\b/i;
+
+  if (buyingIntentPattern.test(normalized)) {
+    return true;
+  }
+
+  // Direct shopping commands:
+  // "Buy milk and eggs."
+  // "Purchase a laptop."
+  // "Pick up bread and butter."
+  const directBuyingPattern =
+    /^\s*(?:please\s+)?(?:buy|purchase|pick up|get)\s+.+/i;
+
+  if (directBuyingPattern.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
 export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
   const [isProcessing, setIsProcessing] = useState(false);
-  const [processingStatus, setProcessingStatus] = useState<string>("");
-  const [previewData, setPreviewData] = useState<StructuredItemData | null>(null);
+  const [processingStatus, setProcessingStatus] = useState("");
+  const [previewData, setPreviewData] =
+    useState<StructuredItemData | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const {
@@ -64,22 +112,138 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
     cancelRecording,
   } = useVoiceRecorder();
 
+  /**
+   * Creates a preview using local parsing when the API fails.
+   */
+  const createFallbackPreview = (
+    text: string,
+    audioData?: {
+      audioBlob: Blob;
+      audioDuration: number;
+      audioPreviewUrl?: string;
+    }
+  ): StructuredItemData => {
+    const offset = new Date().getTimezoneOffset();
+
+    const natural = parseNaturalReminder(
+      text,
+      new Date(),
+      offset
+    );
+
+    // Reminder intent takes priority.
+    if (natural.isReminder) {
+      return {
+        type: "reminder",
+        title: natural.title,
+        content:
+          cleanReminderContent(text) ||
+          (audioData
+            ? `Voice Reminder (${audioData.audioDuration}s)`
+            : text),
+        dueDate: natural.dueDate,
+        dueDateLocal: natural.dueDateLocal,
+        recurrenceMode: natural.recurrenceMode || "once",
+        recurrenceDays: natural.recurrenceDays,
+        isDaily: natural.recurrenceMode === "daily",
+        ...(audioData || {}),
+        tags: audioData
+          ? ["#reminder", "#voice"]
+          : ["#reminder"],
+      };
+    }
+
+    // Only explicit shopping/checklist intent creates a list.
+    if (isExplicitListRequest(text)) {
+      const listInfo = generateSmartListInfo(text);
+
+      return {
+        type: "list",
+        title: listInfo.title,
+        content: listInfo.content,
+        checklist: listInfo.checklist,
+        ...(audioData || {}),
+        tags: audioData
+          ? ["#list", "#voice"]
+          : ["#list"],
+      };
+    }
+
+    // Everything else remains a note.
+    const noteInfo = generateSmartNoteInfo(text);
+
+    return {
+      type: "note",
+      title: noteInfo.title,
+      content: noteInfo.content,
+      ...(audioData || {}),
+      tags: audioData
+        ? ["#note", "#voice"]
+        : ["#note"],
+    };
+  };
+
+  /**
+   * Corrects an API response when it misses clear shopping intent.
+   *
+   * We do not override an API Reminder.
+   */
+  const correctApiClassification = (
+    data: StructuredItemData,
+    text: string,
+    audioData?: {
+      audioBlob: Blob;
+      audioDuration: number;
+      audioPreviewUrl?: string;
+    }
+  ): StructuredItemData => {
+    if (
+      data.type === "reminder" ||
+      data.type === "list" ||
+      !isExplicitListRequest(text)
+    ) {
+      return {
+        ...data,
+        ...(audioData || {}),
+      };
+    }
+
+    const listInfo = generateSmartListInfo(text);
+
+    return {
+      ...data,
+      type: "list",
+      title: listInfo.title,
+      content: listInfo.content,
+      checklist: listInfo.checklist,
+      ...(audioData || {}),
+      tags: audioData
+        ? ["#list", "#voice"]
+        : data.tags?.length
+          ? data.tags
+          : ["#list"],
+    };
+  };
+
   // Handle manual text submission
   const handleTextSubmit = async (values: CaptureFormValues) => {
     if (isProcessing) return;
 
     setIsProcessing(true);
-    setProcessingStatus("Structuring note with AI...");
+    setProcessingStatus("Structuring text...");
 
     try {
       const clientTimezoneOffset = new Date().getTimezoneOffset();
-      const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const clientTimezone =
+        Intl.DateTimeFormat().resolvedOptions().timeZone;
       const clientNowISO = new Date().toISOString();
       const clientNowLocal = new Date().toString();
 
       const res = await fetch("/api/ai/process", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           text: values.text,
           clientTimezone,
@@ -90,84 +254,19 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       });
 
       const data = await res.json();
+
       if (!res.ok) {
-        const natural = parseNaturalReminder(values.text, new Date(), clientTimezoneOffset);
-        if (natural.isReminder) {
-          setPreviewData({
-            type: "reminder",
-            title: natural.title,
-            content: cleanReminderContent(values.text),
-            dueDate: natural.dueDate,
-            dueDateLocal: natural.dueDateLocal,
-            recurrenceMode: natural.recurrenceMode || "once",
-            recurrenceDays: natural.recurrenceDays,
-            isDaily: natural.recurrenceMode === "daily",
-            tags: ["#reminder"],
-          });
-        } else if (
-          values.text.toLowerCase().includes("buy ") ||
-          values.text.toLowerCase().includes("list") ||
-          values.text.includes(",")
-        ) {
-          const listInfo = generateSmartListInfo(values.text);
-          setPreviewData({
-            type: "list",
-            title: listInfo.title,
-            content: listInfo.content,
-            checklist: listInfo.checklist,
-            tags: ["#list"],
-          });
-        } else {
-          const noteInfo = generateSmartNoteInfo(values.text);
-          setPreviewData({
-            type: "note",
-            title: noteInfo.title,
-            content: noteInfo.content,
-            tags: ["#note"],
-          });
-        }
+        setPreviewData(createFallbackPreview(values.text));
       } else {
-        setPreviewData(data);
+        setPreviewData(
+          correctApiClassification(data, values.text)
+        );
       }
+
       setIsPreviewOpen(true);
       reset();
     } catch {
-      const offset = new Date().getTimezoneOffset();
-      const natural = parseNaturalReminder(values.text, new Date(), offset);
-      if (natural.isReminder) {
-        setPreviewData({
-          type: "reminder",
-          title: natural.title,
-          content: cleanReminderContent(values.text),
-          dueDate: natural.dueDate,
-          dueDateLocal: natural.dueDateLocal,
-          recurrenceMode: natural.recurrenceMode || "once",
-          recurrenceDays: natural.recurrenceDays,
-          isDaily: natural.recurrenceMode === "daily",
-          tags: ["#reminder"],
-        });
-      } else if (
-        values.text.toLowerCase().includes("buy ") ||
-        values.text.toLowerCase().includes("list") ||
-        values.text.includes(",")
-      ) {
-        const listInfo = generateSmartListInfo(values.text);
-        setPreviewData({
-          type: "list",
-          title: listInfo.title,
-          content: listInfo.content,
-          checklist: listInfo.checklist,
-          tags: ["#list"],
-        });
-      } else {
-        const noteInfo = generateSmartNoteInfo(values.text);
-        setPreviewData({
-          type: "note",
-          title: noteInfo.title,
-          content: noteInfo.content,
-          tags: ["#note"],
-        });
-      }
+      setPreviewData(createFallbackPreview(values.text));
       setIsPreviewOpen(true);
       reset();
     } finally {
@@ -177,15 +276,20 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
   };
 
   const handleTextError = () => {
-    toast.error("Please enter some text or click the microphone to record");
+    toast.error(
+      "Please enter some text or click the microphone to record"
+    );
   };
 
   // Handle Stop Recording & Transcribe
   const handleStopAndProcess = async () => {
     setIsProcessing(true);
-    setProcessingStatus("Transcribing audio & structuring with AI...");
+    setProcessingStatus(
+      "Transcribing audio & structuring with AI..."
+    );
 
     const result = await stopRecording();
+
     if (!result || result.blob.size === 0) {
       setIsProcessing(false);
       setProcessingStatus("");
@@ -196,7 +300,9 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
     if (result.duration < 1) {
       setIsProcessing(false);
       setProcessingStatus("");
-      toast.error("Recording is too short (minimum 1 second). Please speak clearly.");
+      toast.error(
+        "Recording is too short (minimum 1 second). Please speak clearly."
+      );
       return;
     }
 
@@ -209,7 +315,9 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
 
     try {
       const formData = new FormData();
+
       const rawMime = (result.blob.type || "").toLowerCase();
+
       let filename = "voice-recording.webm";
       let cleanType = "audio/webm";
 
@@ -224,17 +332,37 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
         cleanType = "audio/wav";
       }
 
-      // Create a clean audio blob without codec parameters for backend & Whisper API compatibility
-      const sanitizedBlob = new Blob([result.blob], { type: cleanType });
+      // Remove codec parameters for backend and Whisper compatibility.
+      const sanitizedBlob = new Blob([result.blob], {
+        type: cleanType,
+      });
+
       formData.append("audio", sanitizedBlob, filename);
-      formData.append("fallbackText", (result.browserTranscript || "").trim());
+
+      formData.append(
+        "fallbackText",
+        (result.browserTranscript || "").trim()
+      );
+
       formData.append(
         "clientTimezone",
         Intl.DateTimeFormat().resolvedOptions().timeZone
       );
-      formData.append("clientTimezoneOffset", new Date().getTimezoneOffset().toString());
-      formData.append("clientNowISO", new Date().toISOString());
-      formData.append("clientNowLocal", new Date().toString());
+
+      formData.append(
+        "clientTimezoneOffset",
+        new Date().getTimezoneOffset().toString()
+      );
+
+      formData.append(
+        "clientNowISO",
+        new Date().toISOString()
+      );
+
+      formData.append(
+        "clientNowLocal",
+        new Date().toString()
+      );
 
       const res = await fetch("/api/ai/process", {
         method: "POST",
@@ -242,144 +370,93 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       });
 
       const data = await res.json();
+
       if (!res.ok) {
         const text = (result.browserTranscript || "").trim();
-        // Do not default to Note when transcript is empty or incomplete; alert the user
+
         if (!text) {
           setIsProcessing(false);
           setProcessingStatus("");
+
           toast.error(
-            data?.error || "Could not transcribe audio. Please speak clearly and try again."
+            data?.error ||
+            "Could not transcribe audio. Please speak clearly and try again.",
+            { duration: 6000 }
           );
+
           return;
         }
 
-        toast("Transcribed using local speech recognition", { icon: "🎙️" });
-        const offset = new Date().getTimezoneOffset();
-        const natural = parseNaturalReminder(text, new Date(), offset);
+        toast("Transcribed using local speech recognition", {
+          icon: "🎙️",
+        });
 
-        if (natural.isReminder) {
-          setPreviewData({
-            type: "reminder",
-            title: natural.title,
-            content: cleanReminderContent(text) || `Voice Reminder (${result.duration}s)`,
-            dueDate: natural.dueDate,
-            dueDateLocal: natural.dueDateLocal,
-            recurrenceMode: natural.recurrenceMode || "once",
-            recurrenceDays: natural.recurrenceDays,
-            isDaily: natural.recurrenceMode === "daily",
+        setPreviewData(
+          createFallbackPreview(text, {
             audioBlob: sanitizedBlob,
             audioDuration: result.duration,
             audioPreviewUrl: result.url,
-            tags: ["#reminder", "#voice"],
-          });
-        } else if (
-          text.toLowerCase().includes("buy ") ||
-          text.toLowerCase().includes("list") ||
-          text.toLowerCase().includes("groceries") ||
-          text.toLowerCase().includes("shopping") ||
-          text.toLowerCase().includes("todo") ||
-          text.includes(",") ||
-          text.toLowerCase().includes(" and ")
-        ) {
-          const listInfo = generateSmartListInfo(text);
-          setPreviewData({
-            type: "list",
-            title: listInfo.title,
-            content: listInfo.content,
-            checklist: listInfo.checklist,
-            audioBlob: sanitizedBlob,
-            audioDuration: result.duration,
-            audioPreviewUrl: result.url,
-            tags: ["#list", "#voice"],
-          });
-        } else {
-          const noteInfo = generateSmartNoteInfo(text);
-          setPreviewData({
-            type: "note",
-            title: noteInfo.title,
-            content: noteInfo.content,
-            audioBlob: sanitizedBlob,
-            audioDuration: result.duration,
-            audioPreviewUrl: result.url,
-            tags: ["#note", "#voice"],
-          });
-        }
+          })
+        );
+
         setIsPreviewOpen(true);
       } else {
         if (data.isQuotaExhausted) {
           toast(
             "Transcribed via speech recognition (OpenAI account has 0 credits remaining).",
-            { icon: "🎙️", duration: 6000 }
+            {
+              icon: "🎙️",
+              duration: 6000,
+            }
           );
         } else {
           toast.success("Transcribed & structured with AI! ✨");
         }
-        setPreviewData({
+
+        const text = (result.browserTranscript || "").trim();
+
+        // Use the API classification unless it misses explicit
+        // shopping/checklist intent.
+        let finalPreview: StructuredItemData = {
           ...data,
           audioBlob: sanitizedBlob,
           audioDuration: result.duration,
           audioPreviewUrl: result.url,
-        });
+        };
+
+        if (text) {
+          finalPreview = correctApiClassification(
+            finalPreview,
+            text,
+            {
+              audioBlob: sanitizedBlob,
+              audioDuration: result.duration,
+              audioPreviewUrl: result.url,
+            }
+          );
+        }
+
+        setPreviewData(finalPreview);
         setIsPreviewOpen(true);
       }
     } catch {
       const text = (result.browserTranscript || "").trim();
+
       if (!text) {
-        toast.error("Could not transcribe audio. Please speak clearly and try again.");
+        toast.error(
+          "Could not transcribe audio. Please speak clearly and try again."
+        );
         return;
       }
 
-      const offset = new Date().getTimezoneOffset();
-      const natural = parseNaturalReminder(text, new Date(), offset);
+      setPreviewData(
+        createFallbackPreview(text, {
+          audioBlob: result.blob,
+          audioDuration: result.duration,
+          audioPreviewUrl: result.url,
+        })
+      );
 
-      if (natural.isReminder) {
-        setPreviewData({
-          type: "reminder",
-          title: natural.title,
-          content: cleanReminderContent(text) || `Voice Reminder (${result.duration}s)`,
-          dueDate: natural.dueDate,
-          dueDateLocal: natural.dueDateLocal,
-          recurrenceMode: natural.recurrenceMode || "once",
-          recurrenceDays: natural.recurrenceDays,
-          isDaily: natural.recurrenceMode === "daily",
-          audioBlob: result.blob,
-          audioDuration: result.duration,
-          audioPreviewUrl: result.url,
-          tags: ["#reminder", "#voice"],
-        });
-      } else if (
-        text.toLowerCase().includes("buy ") ||
-        text.toLowerCase().includes("list") ||
-        text.toLowerCase().includes("groceries") ||
-        text.toLowerCase().includes("shopping") ||
-        text.toLowerCase().includes("todo") ||
-        text.includes(",") ||
-        text.toLowerCase().includes(" and ")
-      ) {
-        const listInfo = generateSmartListInfo(text);
-        setPreviewData({
-          type: "list",
-          title: listInfo.title,
-          content: listInfo.content,
-          checklist: listInfo.checklist,
-          audioBlob: result.blob,
-          audioDuration: result.duration,
-          audioPreviewUrl: result.url,
-          tags: ["#list", "#voice"],
-        });
-      } else {
-        const noteInfo = generateSmartNoteInfo(text);
-        setPreviewData({
-          type: "note",
-          title: noteInfo.title,
-          content: noteInfo.content,
-          audioBlob: result.blob,
-          audioDuration: result.duration,
-          audioPreviewUrl: result.url,
-          tags: ["#note", "#voice"],
-        });
-      }
       setIsPreviewOpen(true);
     } finally {
       setIsProcessing(false);
@@ -389,7 +466,9 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
 
   const handleCancelRecording = () => {
     cancelRecording();
-    toast("Recording discarded", { icon: "🗑️" });
+    toast("Recording discarded", {
+      icon: "🗑️",
+    });
   };
 
   return (
@@ -405,10 +484,26 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
         {/* Processing Spinner Notification */}
         {isProcessing && (
           <div className="mb-3 flex items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50/70 p-3 text-xs font-medium text-indigo-700 dark:border-indigo-900/50 dark:bg-indigo-950/40 dark:text-indigo-300 animate-pulse">
-            <svg className="h-4 w-4 animate-spin text-indigo-600 dark:text-indigo-400" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            <svg
+              className="h-4 w-4 animate-spin text-indigo-600 dark:text-indigo-400"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+              />
             </svg>
+
             {processingStatus}
           </div>
         )}
@@ -422,15 +517,17 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
                   {!isPaused && (
                     <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
                   )}
+
                   <span
-                    className={`relative inline-flex h-3 w-3 sm:h-3.5 sm:w-3.5 rounded-full ${
-                      isPaused ? "bg-amber-500" : "bg-rose-500"
-                    }`}
+                    className={`relative inline-flex h-3 w-3 sm:h-3.5 sm:w-3.5 rounded-full ${isPaused ? "bg-amber-500" : "bg-rose-500"
+                      }`}
                   />
                 </span>
+
                 <span className="font-mono text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200">
                   {formattedTime}
                 </span>
+
                 <span className="text-[11px] sm:text-xs font-medium text-zinc-500 dark:text-zinc-400">
                   {isPaused ? "Paused" : "Recording..."}
                 </span>
@@ -443,20 +540,32 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
                 className="sm:hidden rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
                 title="Discard recording"
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
               </button>
             </div>
 
             {/* Live Waveform Visualizer */}
             <div className="w-full sm:flex-1 sm:max-w-xs flex justify-center py-0.5 sm:py-0">
-              <WaveformVisualizer analyser={analyser} isPaused={isPaused} />
+              <WaveformVisualizer
+                analyser={analyser}
+                isPaused={isPaused}
+              />
             </div>
 
             {/* Control buttons */}
             <div className="flex items-center justify-end gap-2 w-full sm:w-auto">
-              {/* Pause / Resume */}
               {isPaused ? (
                 <Button
                   type="button"
@@ -497,8 +606,18 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
                 className="hidden sm:block rounded-xl p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
                 title="Discard recording"
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
               </button>
             </div>
@@ -506,7 +625,10 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
         ) : (
           /* Normal Capture Input Bar */
           <form
-            onSubmit={handleSubmit(handleTextSubmit, handleTextError)}
+            onSubmit={handleSubmit(
+              handleTextSubmit,
+              handleTextError
+            )}
             className="flex items-center gap-1.5 sm:gap-2 rounded-2xl border border-zinc-200/90 bg-white p-1.5 sm:p-2 shadow-sm transition-all focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-600/15 dark:border-zinc-800 dark:bg-zinc-900"
           >
             <input
@@ -526,8 +648,19 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
               title="Save typed text"
             >
               <span>Save</span>
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
               </svg>
             </Button>
 
@@ -539,7 +672,12 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition-transform active:scale-95 focus:outline-none"
               title="Record voice note"
             >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg
+                className="h-5 w-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"

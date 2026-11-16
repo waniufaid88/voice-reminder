@@ -1,3 +1,4 @@
+
 /**
  * Natural language date, time, and recurrence parser.
  * Extracts exact days, times, and recurrence frequencies from user text or voice transcripts.
@@ -106,39 +107,31 @@ export function parseNaturalReminder(
   const userHours = userWallClockDate.getUTCHours();
   const userMinutes = userWallClockDate.getUTCMinutes();
 
-  // 1. Check if input is likely a reminder
-  const reminderKeywords = [
-    "remind",
-    "reminder",
-    "schedule",
-    "appointment",
-    "meeting",
-    "deadline",
-    "due",
-    "tomorrow",
-    "tonight",
-    "alarm",
-    "at ",
-    "on monday",
-    "on tuesday",
-    "on wednesday",
-    "on thursday",
-    "on friday",
-    "on saturday",
-    "on sunday",
-    "every day",
-    "daily",
-  ];
+  // 1. Check if input is likely a reminder.
+  // Use word-boundary patterns instead of lower.includes("at "),
+  // because "at " also appears inside words such as "that ".
+  const reminderIntentPattern =
+    /\b(remind|reminder|schedule|appointment|meeting|deadline|alarm|due date)\b/i;
 
-  const hasReminderKeyword = reminderKeywords.some((kw) => lower.includes(kw));
+  // Relative dates and recurring schedules
+  const schedulingPattern =
+    /\b(tomorrow|tmrw|tonight|day after tomorrow|every day|everyday|each day|daily|weekdays|weekends)\b/i;
 
-  // Time pattern check (e.g. 5pm, 4:30 pm, 3:00 p.m., at 10)
+  // Specific weekday references
+  const weekdayPattern =
+    /\b(?:on|this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+
+  // Specific times: 5 PM, 4:30 AM, at 10, in 2 hours
   const hasTimePattern =
-    /\b\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.?|p\.m\.?)\b/i.test(rawText) ||
-    /\bat\s+\d{1,2}(?::\d{2})?\b/i.test(rawText) ||
-    /\bin\s+\d+\s*(?:minute|min|hour|hr|day)s?\b/i.test(rawText);
+    /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.test(normalizedText) ||
+    /\bat\s+\d{1,2}(?::\d{2})?\b/i.test(normalizedText) ||
+    /\bin\s+\d+\s*(?:minutes?|mins?|hours?|hrs?|days?)\b/i.test(normalizedText);
 
-  const isReminder = hasReminderKeyword || hasTimePattern;
+  const isReminder =
+    reminderIntentPattern.test(normalizedText) ||
+    schedulingPattern.test(normalizedText) ||
+    weekdayPattern.test(normalizedText) ||
+    hasTimePattern;
 
   // 2. Detect Recurrence
   let recurrenceMode: "once" | "daily" | "custom" = "once";
@@ -163,10 +156,13 @@ export function parseNaturalReminder(
     const everyDayMatch = lower.match(
       /\b(?:every|on)\s+([a-z\s,and]+?)(?:\s+at|\s+in|\s+for|$)/i
     );
+
     if (everyDayMatch) {
       const dayTokens = everyDayMatch[1].split(/[\s,]+and[\s,]+|[\s,]+/);
+
       for (const token of dayTokens) {
         const cleaned = token.replace(/s$/, "");
+
         if (DAY_MAP[cleaned] !== undefined) {
           customDaysFound.add(DAY_MAP[cleaned]);
         }
@@ -187,6 +183,7 @@ export function parseNaturalReminder(
   const relativeMatch = lower.match(
     /\bin\s+(\d+)\s*(minute|min|minutes|mins|hour|hr|hours|hrs|day|days)\b/i
   );
+
   if (relativeMatch) {
     const amount = parseInt(relativeMatch[1], 10);
     const unit = relativeMatch[2].toLowerCase();
@@ -204,6 +201,7 @@ export function parseNaturalReminder(
     const targetWallClock = new Date(finalDueDate - offset * 60 * 1000);
     const targetH = targetWallClock.getUTCHours();
     const targetM = targetWallClock.getUTCMinutes();
+
     const dueDateLocal = formatToLocalDatetimeString(
       targetWallClock.getUTCFullYear(),
       targetWallClock.getUTCMonth(),
@@ -213,6 +211,7 @@ export function parseNaturalReminder(
     );
 
     const title = cleanReminderTitle(rawText);
+
     return {
       isReminder: true,
       title,
@@ -228,6 +227,7 @@ export function parseNaturalReminder(
   const timeWithMinutes12h = lower.match(
     /\b(\d{1,2})[:.](\d{2})\s*(am|pm|a\.m\.?|p\.m\.?)\b/i
   );
+
   if (timeWithMinutes12h) {
     let h = parseInt(timeWithMinutes12h[1], 10);
     const m = parseInt(timeWithMinutes12h[2], 10);
@@ -235,19 +235,24 @@ export function parseNaturalReminder(
 
     if (meridian === "pm" && h < 12) h += 12;
     if (meridian === "am" && h === 12) h = 0;
+
     extractedHours = h;
     extractedMinutes = m;
   }
 
   // Case 3c: "H am/pm" or "HH am/pm" (e.g. "5 pm", "10am", "at 9 PM", "3 p.m.")
   if (extractedHours === null) {
-    const timeNoMinutes12h = lower.match(/\b(\d{1,2})\s*(am|pm|a\.m\.?|p\.m\.?)\b/i);
+    const timeNoMinutes12h = lower.match(
+      /\b(\d{1,2})\s*(am|pm|a\.m\.?|p\.m\.?)\b/i
+    );
+
     if (timeNoMinutes12h) {
       let h = parseInt(timeNoMinutes12h[1], 10);
       const meridian = timeNoMinutes12h[2].toLowerCase().replace(/\./g, "");
 
       if (meridian === "pm" && h < 12) h += 12;
       if (meridian === "am" && h === 12) h = 0;
+
       extractedHours = h;
       extractedMinutes = 0;
     }
@@ -255,14 +260,19 @@ export function parseNaturalReminder(
 
   // Case 3d: "at HH:MM" format (e.g. "at 16:30", "at 09:15", "at 3:00")
   if (extractedHours === null) {
-    const time24h = lower.match(/\bat\s+(\d{1,2})[:.](\d{2})(?!\s*(?:am|pm|a\.m|p\.m))\b/i);
+    const time24h = lower.match(
+      /\bat\s+(\d{1,2})[:.](\d{2})(?!\s*(?:am|pm|a\.m|p\.m))\b/i
+    );
+
     if (time24h) {
       let h = parseInt(time24h[1], 10);
       const m = parseInt(time24h[2], 10);
+
       // In business and personal speech, "at 1:00" through "at 7:00" defaults to PM unless "morning" is in text
       if (h >= 1 && h <= 7 && !lower.includes("morning") && !lower.includes("am")) {
         h += 12;
       }
+
       extractedHours = h;
       extractedMinutes = m;
     }
@@ -270,15 +280,21 @@ export function parseNaturalReminder(
 
   // Case 3e: "at H o'clock" (e.g. "at 5 o'clock", "at 7 o'clock pm")
   if (extractedHours === null) {
-    const oclockMatch = lower.match(/\bat\s+(\d{1,2})\s*o'?clock(?:\s*(am|pm))?\b/i);
+    const oclockMatch = lower.match(
+      /\bat\s+(\d{1,2})\s*o'?clock(?:\s*(am|pm))?\b/i
+    );
+
     if (oclockMatch) {
       let h = parseInt(oclockMatch[1], 10);
       const meridian = oclockMatch[2]?.toLowerCase();
+
       if (meridian === "pm" && h < 12) h += 12;
       if (meridian === "am" && h === 12) h = 0;
+
       if (!meridian) {
         if (h >= 1 && h <= 6) h += 12;
       }
+
       extractedHours = h;
       extractedMinutes = 0;
     }
@@ -287,8 +303,10 @@ export function parseNaturalReminder(
   // Case 3f: "at H" (e.g. "at 5", "at 10", "at 4")
   if (extractedHours === null) {
     const atHourMatch = lower.match(/\bat\s+(\d{1,2})\b(?!\s*[:.\d])/i);
+
     if (atHourMatch) {
       let h = parseInt(atHourMatch[1], 10);
+
       if (h >= 1 && h <= 12) {
         if (lower.includes("morning")) {
           if (h === 12) h = 0;
@@ -302,6 +320,7 @@ export function parseNaturalReminder(
         } else {
           if (h >= 1 && h <= 6) h += 12;
         }
+
         extractedHours = h;
         extractedMinutes = 0;
       }
@@ -340,6 +359,7 @@ export function parseNaturalReminder(
   if (lower.includes("day after tomorrow")) {
     const d = new Date(userWallClockDate);
     d.setUTCDate(d.getUTCDate() + 2);
+
     targetYear = d.getUTCFullYear();
     targetMonth = d.getUTCMonth();
     targetDay = d.getUTCDate();
@@ -347,6 +367,7 @@ export function parseNaturalReminder(
   } else if (lower.includes("tomorrow") || lower.includes("tmrw") || lower.includes("tom")) {
     const d = new Date(userWallClockDate);
     d.setUTCDate(d.getUTCDate() + 1);
+
     targetYear = d.getUTCFullYear();
     targetMonth = d.getUTCMonth();
     targetDay = d.getUTCDate();
@@ -356,7 +377,11 @@ export function parseNaturalReminder(
   } else {
     // Check for days of the week: "monday", "friday", "on saturday", etc.
     for (const [dayName, targetDayNum] of Object.entries(DAY_MAP)) {
-      const dayRegex = new RegExp(`\\b(?:on\\s+|this\\s+|next\\s+)?${dayName}\\b`, "i");
+      const dayRegex = new RegExp(
+        `\\b(?:on\\s+|this\\s+|next\\s+)?${dayName}\\b`,
+        "i"
+      );
+
       if (dayRegex.test(lower)) {
         let daysUntil = (targetDayNum - userDayOfWeek + 7) % 7;
 
@@ -364,6 +389,7 @@ export function parseNaturalReminder(
           if (extractedHours !== null) {
             const h = extractedHours;
             const m = extractedMinutes || 0;
+
             if (h < userHours || (h === userHours && m <= userMinutes)) {
               daysUntil = 7;
             }
@@ -374,6 +400,7 @@ export function parseNaturalReminder(
 
         const d = new Date(userWallClockDate);
         d.setUTCDate(d.getUTCDate() + daysUntil);
+
         targetYear = d.getUTCFullYear();
         targetMonth = d.getUTCMonth();
         targetDay = d.getUTCDate();
@@ -387,23 +414,39 @@ export function parseNaturalReminder(
       for (const [monthName, monthIndex] of Object.entries(MONTH_MAP)) {
         const dateMatch =
           lower.match(
-            new RegExp(`\\b(?:on\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthName}\\b`, "i")
+            new RegExp(
+              `\\b(?:on\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthName}\\b`,
+              "i"
+            )
           ) ||
           lower.match(
-            new RegExp(`\\b(?:on\\s+)?${monthName}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`, "i")
+            new RegExp(
+              `\\b(?:on\\s+)?${monthName}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`,
+              "i"
+            )
           );
 
         if (dateMatch) {
           const dayNum = parseInt(dateMatch[1], 10);
+
           targetMonth = monthIndex;
           targetDay = dayNum;
           targetYear = userYear;
+
           const candidateUtc =
-            Date.UTC(targetYear, targetMonth, targetDay, extractedHours || 9, extractedMinutes || 0) +
+            Date.UTC(
+              targetYear,
+              targetMonth,
+              targetDay,
+              extractedHours || 9,
+              extractedMinutes || 0
+            ) +
             offset * 60 * 1000;
+
           if (candidateUtc < referenceDate.getTime() - 24 * 60 * 60 * 1000) {
             targetYear += 1;
           }
+
           dayExplicitlyFound = true;
           break;
         }
@@ -424,6 +467,7 @@ export function parseNaturalReminder(
       ) {
         const d = new Date(userWallClockDate);
         d.setUTCDate(d.getUTCDate() + 1);
+
         targetYear = d.getUTCFullYear();
         targetMonth = d.getUTCMonth();
         targetDay = d.getUTCDate();
@@ -433,6 +477,7 @@ export function parseNaturalReminder(
     // Day mentioned, no time -> default to 9:00 AM on that day
     finalHours = 9;
     finalMinutes = 0;
+
     if (
       targetDay === userDay &&
       targetMonth === userMonth &&
@@ -441,10 +486,13 @@ export function parseNaturalReminder(
     ) {
       finalHours = userHours + 2;
       finalMinutes = userMinutes;
+
       if (finalHours >= 24) {
         finalHours -= 24;
+
         const d = new Date(userWallClockDate);
         d.setUTCDate(d.getUTCDate() + 1);
+
         targetYear = d.getUTCFullYear();
         targetMonth = d.getUTCMonth();
         targetDay = d.getUTCDate();
@@ -454,6 +502,7 @@ export function parseNaturalReminder(
     // General reminder with no time or day -> +2 hours from now
     const targetUtcMs = referenceDate.getTime() + 2 * 60 * 60 * 1000;
     const targetWallClock = new Date(targetUtcMs - offset * 60 * 1000);
+
     targetYear = targetWallClock.getUTCFullYear();
     targetMonth = targetWallClock.getUTCMonth();
     targetDay = targetWallClock.getUTCDate();
@@ -464,10 +513,12 @@ export function parseNaturalReminder(
   let finalDueDate: number | undefined = undefined;
   let dueDateLocal: string | undefined = undefined;
 
-  if (finalHours !== null) {
+  // Only attach a due date when the input has been classified as a reminder.
+  if (isReminder && finalHours !== null) {
     finalDueDate =
       Date.UTC(targetYear, targetMonth, targetDay, finalHours, finalMinutes, 0, 0) +
       offset * 60 * 1000;
+
     dueDateLocal = formatToLocalDatetimeString(
       targetYear,
       targetMonth,
@@ -512,7 +563,8 @@ export function cleanReminderTitle(rawText: string): string {
     .replace(/^schedule\s+(?:a\s+)?(?:meeting\s+with\s+|appointment\s+with\s+)?/i, "")
     .trim();
 
-  // Strip date & time suffixes from the title so title is a concise action (e.g. "Call John", "Important Meeting")
+  // Strip date & time suffixes from the title so title is a concise action
+  // (e.g. "Call John", "Important Meeting")
   cleaned = cleaned
     .replace(/\s+(?:tomorrow|today|tonight)(?:\s+at\s+.*)?$/i, "")
     .replace(/\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.?|p\.m\.?).*$/i, "")
@@ -523,6 +575,7 @@ export function cleanReminderTitle(rawText: string): string {
     .trim();
 
   const words = cleaned.split(/\s+/).filter(Boolean);
+
   if (words.length > 5) {
     cleaned = words.slice(0, 4).join(" ");
   }
@@ -542,6 +595,7 @@ export function cleanReminderTitle(rawText: string): string {
  */
 export function cleanReminderContent(rawText: string): string {
   let cleaned = rawText.trim();
+
   cleaned = cleaned
     .replace(/^(?:i\s+have\s+to|i\s+need\s+to|i\s+must)\s+/i, "")
     .replace(/^(?:please\s+)?remind\s+me\s+(?:to\s+|about\s+|that\s+)?/i, "")
@@ -599,7 +653,11 @@ export function generateSmartListInfo(rawText: string): {
   ) {
     title = "Packing List";
     content = "Items to pack for the trip.";
-  } else if (lower.includes("todo") || lower.includes("task") || lower.includes("work")) {
+  } else if (
+    lower.includes("todo") ||
+    lower.includes("task") ||
+    lower.includes("work")
+  ) {
     title = "To-Do List";
     content = "Tasks to complete.";
   } else {
@@ -610,14 +668,24 @@ export function generateSmartListInfo(rawText: string): {
   const checklist =
     items.length > 0
       ? items.map((rawItem, idx) => {
-          const cleanedItem = rawItem.replace(/^[-,•*]\s*/, "").replace(/[.,;]+$/, "").trim();
-          return {
-            id: (idx + 1).toString(),
-            text: cleanedItem.charAt(0).toUpperCase() + cleanedItem.slice(1),
-            completed: false,
-          };
-        })
-      : [{ id: "1", text: rawText.replace(/[.,;]+$/, "").trim(), completed: false }];
+        const cleanedItem = rawItem
+          .replace(/^[-,•*]\s*/, "")
+          .replace(/[.,;]+$/, "")
+          .trim();
+
+        return {
+          id: (idx + 1).toString(),
+          text: cleanedItem.charAt(0).toUpperCase() + cleanedItem.slice(1),
+          completed: false,
+        };
+      })
+      : [
+        {
+          id: "1",
+          text: rawText.replace(/[.,;]+$/, "").trim(),
+          completed: false,
+        },
+      ];
 
   return { title, content, checklist };
 }
@@ -645,7 +713,10 @@ export function generateSmartNoteInfo(rawText: string): {
   let title = "General Note";
 
   if (words.length >= 2) {
-    title = words.slice(0, 3).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    title = words
+      .slice(0, 3)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
   } else if (words.length === 1) {
     title = words[0].charAt(0).toUpperCase() + words[0].slice(1) + " Note";
   }

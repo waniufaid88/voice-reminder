@@ -8,18 +8,25 @@ import toast from "react-hot-toast";
 import { AudioPlayer } from "./AudioPlayer";
 import { RecurrenceSelector } from "./RecurrenceSelector";
 import { DateTimePicker12h } from "./DateTimePicker12h";
-import { formatLocalDatetime, parseLocalDatetime, formatAudioDuration } from "@/lib/date-utils";
-import { parseNaturalReminder, generateSmartListInfo } from "@/lib/natural-date-parser";
+import {
+  formatLocalDatetime,
+  parseLocalDatetime,
+  formatAudioDuration,
+} from "@/lib/date-utils";
+import { parseNaturalReminder } from "@/lib/natural-date-parser";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
+
 import {
   Dialog,
   DialogHeader,
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+
 import {
   Form,
   FormField,
@@ -38,7 +45,11 @@ export interface StructuredItemData {
   isDaily?: boolean;
   recurrenceMode?: "once" | "daily" | "custom";
   recurrenceDays?: number[];
-  checklist?: Array<{ id: string; text: string; completed: boolean }>;
+  checklist?: Array<{
+    id: string;
+    text: string;
+    completed: boolean;
+  }>;
   tags?: string[];
   audioBlob?: Blob;
   audioDuration?: number;
@@ -79,105 +90,144 @@ export function ItemPreviewDialog({
     },
   });
 
-  const { watch, getValues, setValue, reset, handleSubmit } = form;
+  const {
+    watch,
+    getValues,
+    setValue,
+    reset,
+    handleSubmit,
+  } = form;
+
   const currentType = watch("type");
   const currentTags = watch("tags") || [];
   const currentChecklist = watch("checklist") || [];
-  const currentRecurrenceMode = (watch("recurrenceMode") as "once" | "daily" | "custom") || "once";
-  const currentRecurrenceDays = watch("recurrenceDays") || [new Date().getDay()];
 
+  const currentRecurrenceMode =
+    (watch("recurrenceMode") as "once" | "daily" | "custom") ||
+    "once";
+
+  const currentRecurrenceDays =
+    watch("recurrenceDays") || [new Date().getDay()];
+
+  // Initialize the preview using the category returned by the API.
   useEffect(() => {
-    if (itemData) {
-      const cleanContent =
-        itemData.content && !itemData.content.includes("Whisper API failed")
-          ? itemData.content
-          : itemData.rawTranscript || "";
+    if (!itemData) return;
 
-      let calculatedDueDate = itemData.dueDate;
-      let calculatedMode =
-        itemData.recurrenceMode || (itemData.isDaily ? "daily" : "once");
-      let calculatedDays = itemData.recurrenceDays;
+    const cleanContent =
+      itemData.content &&
+        !itemData.content.includes("Whisper API failed")
+        ? itemData.content
+        : itemData.rawTranscript || "";
 
-      // If due date was not set, parse natural language from text or transcript with client timezone offset
-      if (!calculatedDueDate) {
-        const offset = new Date().getTimezoneOffset();
-        const natural = parseNaturalReminder(
-          cleanContent || itemData.title || "",
-          new Date(),
-          offset
-        );
-        if (natural.dueDate) {
-          calculatedDueDate = natural.dueDate;
-          if (natural.recurrenceMode) calculatedMode = natural.recurrenceMode;
-          if (natural.recurrenceDays) calculatedDays = natural.recurrenceDays;
+    // IMPORTANT:
+    // Trust the backend category.
+    // Never classify notes again using commas, "and", or keywords.
+    const itemType: "note" | "reminder" | "list" =
+      itemData.type || "note";
+
+    let calculatedDueDate = itemData.dueDate;
+
+    let calculatedMode =
+      itemData.recurrenceMode ||
+      (itemData.isDaily ? "daily" : "once");
+
+    let calculatedDays = itemData.recurrenceDays;
+
+    // Only parse natural dates for actual reminders.
+    if (itemType === "reminder" && !calculatedDueDate) {
+      const offset = new Date().getTimezoneOffset();
+
+      const natural = parseNaturalReminder(
+        cleanContent || itemData.title || "",
+        new Date(),
+        offset
+      );
+
+      if (natural.dueDate) {
+        calculatedDueDate = natural.dueDate;
+
+        if (natural.recurrenceMode) {
+          calculatedMode = natural.recurrenceMode;
+        }
+
+        if (natural.recurrenceDays) {
+          calculatedDays = natural.recurrenceDays;
         }
       }
-
-      // Automatically route to the exact category in the dialog:
-      // 1. If checklist items exist (or text describes a list) -> strictly "list"
-      // 2. If reminder due date/time is present -> strictly "reminder"
-      // 3. Otherwise -> "note"
-      let finalChecklist = itemData.checklist || [];
-      let itemType: "note" | "reminder" | "list" = itemData.type || "note";
-
-      if (
-        finalChecklist.length === 0 &&
-        (itemData.type === "list" ||
-          cleanContent.toLowerCase().includes("buy ") ||
-          cleanContent.toLowerCase().includes("list") ||
-          cleanContent.includes(","))
-      ) {
-        const listInfo = generateSmartListInfo(cleanContent);
-        if (listInfo.checklist && listInfo.checklist.length > 0) {
-          finalChecklist = listInfo.checklist;
-          itemType = "list";
-        }
-      }
-
-      if (finalChecklist.length > 0) {
-        itemType = "list";
-      } else if (calculatedDueDate || itemData.dueDateLocal || itemData.dueDate) {
-        itemType = "reminder";
-      }
-
-      reset({
-        type: itemType,
-        title: itemData.title || "Untitled",
-        content: cleanContent,
-        dueDateString:
-          itemData.dueDateLocal || formatLocalDatetime(calculatedDueDate),
-        isDaily: calculatedMode === "daily",
-        recurrenceMode: calculatedMode,
-        recurrenceDays: calculatedDays || [new Date().getDay()],
-        checklist: finalChecklist,
-        tags: itemData.tags || ["#voice"],
-      });
-      setValue("type", itemType, { shouldValidate: true });
     }
-  }, [itemData, reset, setValue]);
+
+    // Checklist items are accepted only for actual lists.
+    const finalChecklist =
+      itemType === "list"
+        ? itemData.checklist || []
+        : [];
+
+    reset({
+      type: itemType,
+      title: itemData.title || "Untitled",
+      content: cleanContent,
+
+      dueDateString:
+        itemType === "reminder"
+          ? itemData.dueDateLocal ||
+          formatLocalDatetime(calculatedDueDate)
+          : "",
+
+      isDaily:
+        itemType === "reminder" &&
+        calculatedMode === "daily",
+
+      recurrenceMode:
+        itemType === "reminder"
+          ? calculatedMode
+          : "once",
+
+      recurrenceDays:
+        itemType === "reminder"
+          ? calculatedDays || [new Date().getDay()]
+          : [new Date().getDay()],
+
+      checklist: finalChecklist,
+      tags: itemData.tags || ["#voice"],
+    });
+
+    setNewChecklistText("");
+    setNewTagInput("");
+  }, [itemData, reset]);
 
   if (!isOpen || !itemData) return null;
 
   const handleAddTag = () => {
     let tag = newTagInput.trim();
+
     if (!tag) return;
-    if (!tag.startsWith("#")) tag = "#" + tag;
-    if (!currentTags.includes(tag)) {
-      setValue("tags", [...currentTags, tag], { shouldValidate: true });
+
+    if (!tag.startsWith("#")) {
+      tag = "#" + tag;
     }
+
+    if (!currentTags.includes(tag)) {
+      setValue(
+        "tags",
+        [...currentTags, tag],
+        { shouldValidate: true }
+      );
+    }
+
     setNewTagInput("");
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
     setValue(
       "tags",
-      currentTags.filter((t) => t !== tagToRemove),
+      currentTags.filter((tag) => tag !== tagToRemove),
       { shouldValidate: true }
     );
   };
 
   const handleAddChecklistItem = () => {
     if (!newChecklistText.trim()) return;
+
     setValue(
       "checklist",
       [
@@ -190,6 +240,7 @@ export function ItemPreviewDialog({
       ],
       { shouldValidate: true }
     );
+
     setNewChecklistText("");
   };
 
@@ -201,16 +252,73 @@ export function ItemPreviewDialog({
     );
   };
 
-  const handleUpdateChecklistItem = (id: string, text: string) => {
+  const handleUpdateChecklistItem = (
+    id: string,
+    text: string
+  ) => {
     setValue(
       "checklist",
-      currentChecklist.map((item) => (item.id === id ? { ...item, text } : item)),
+      currentChecklist.map((item) =>
+        item.id === id ? { ...item, text } : item
+      ),
       { shouldValidate: true }
     );
   };
 
+  const handleSelectReminder = () => {
+    setValue("type", "reminder", {
+      shouldValidate: true,
+    });
+
+    if (!getValues("dueDateString")) {
+      const natural = parseNaturalReminder(
+        getValues("content") || getValues("title") || "",
+        new Date()
+      );
+
+      if (natural.dueDate) {
+        setValue(
+          "dueDateString",
+          formatLocalDatetime(natural.dueDate),
+          { shouldValidate: true }
+        );
+
+        if (natural.recurrenceMode) {
+          setValue(
+            "recurrenceMode",
+            natural.recurrenceMode,
+            { shouldValidate: true }
+          );
+
+          setValue(
+            "isDaily",
+            natural.recurrenceMode === "daily",
+            { shouldValidate: true }
+          );
+        }
+
+        if (natural.recurrenceDays) {
+          setValue(
+            "recurrenceDays",
+            natural.recurrenceDays,
+            { shouldValidate: true }
+          );
+        }
+      } else {
+        const defaultTime = formatLocalDatetime(
+          Date.now() + 2 * 60 * 60 * 1000
+        );
+
+        setValue("dueDateString", defaultTime, {
+          shouldValidate: true,
+        });
+      }
+    }
+  };
+
   const onSubmit = async (values: ItemFormValues) => {
     setIsSaving(true);
+
     try {
       const dueDate =
         values.type === "reminder"
@@ -219,23 +327,43 @@ export function ItemPreviewDialog({
 
       await onSave({
         ...itemData,
+
         type: values.type,
         title: values.title.trim(),
         content: values.content.trim(),
+
         dueDate,
-        isDaily: values.type === "reminder" ? values.recurrenceMode === "daily" : undefined,
-        recurrenceMode: values.type === "reminder" ? (values.recurrenceMode || "once") : undefined,
+
+        isDaily:
+          values.type === "reminder"
+            ? values.recurrenceMode === "daily"
+            : undefined,
+
+        recurrenceMode:
+          values.type === "reminder"
+            ? values.recurrenceMode || "once"
+            : undefined,
+
         recurrenceDays:
-          values.type === "reminder" && values.recurrenceMode === "custom"
+          values.type === "reminder" &&
+            values.recurrenceMode === "custom"
             ? values.recurrenceDays
             : undefined,
-        checklist: values.type === "list" ? values.checklist : undefined,
+
+        checklist:
+          values.type === "list"
+            ? values.checklist
+            : undefined,
+
         tags: values.tags,
       });
 
       toast.success(
-        `Saved as ${values.type.charAt(0).toUpperCase() + values.type.slice(1)}!`
+        `Saved as ${values.type.charAt(0).toUpperCase() +
+        values.type.slice(1)
+        }!`
       );
+
       onClose();
     } catch {
       toast.error("Failed to save item.");
@@ -249,6 +377,7 @@ export function ItemPreviewDialog({
       <DialogHeader>
         <div className="flex items-center justify-between">
           <DialogTitle>Preview & Edit</DialogTitle>
+
           <button
             type="button"
             onClick={onClose}
@@ -269,83 +398,102 @@ export function ItemPreviewDialog({
             <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
               Category
             </label>
+
             <div className="flex gap-2">
               <Button
                 type="button"
-                variant={currentType === "note" ? "default" : "secondary"}
-                className={`flex-1 ${currentType === "note" ? "bg-indigo-600 text-white" : ""}`}
-                onClick={() => setValue("type", "note", { shouldValidate: true })}
+                variant={
+                  currentType === "note"
+                    ? "default"
+                    : "secondary"
+                }
+                className={`flex-1 ${currentType === "note"
+                  ? "bg-indigo-600 text-white"
+                  : ""
+                  }`}
+                onClick={() =>
+                  setValue("type", "note", {
+                    shouldValidate: true,
+                  })
+                }
               >
                 📝 Note
               </Button>
+
               <Button
                 type="button"
-                variant={currentType === "reminder" ? "default" : "secondary"}
-                className={`flex-1 ${currentType === "reminder" ? "bg-amber-500 text-white hover:bg-amber-600" : ""}`}
-                onClick={() => {
-                  setValue("type", "reminder", { shouldValidate: true });
-                  if (!getValues("dueDateString")) {
-                    const natural = parseNaturalReminder(
-                      getValues("content") || getValues("title") || "",
-                      new Date()
-                    );
-                    if (natural.dueDate) {
-                      setValue("dueDateString", formatLocalDatetime(natural.dueDate), { shouldValidate: true });
-                      if (natural.recurrenceMode) {
-                        setValue("recurrenceMode", natural.recurrenceMode, { shouldValidate: true });
-                        setValue("isDaily", natural.recurrenceMode === "daily", { shouldValidate: true });
-                      }
-                      if (natural.recurrenceDays) {
-                        setValue("recurrenceDays", natural.recurrenceDays, { shouldValidate: true });
-                      }
-                    } else {
-                      const defaultTime = formatLocalDatetime(Date.now() + 2 * 60 * 60 * 1000);
-                      setValue("dueDateString", defaultTime, { shouldValidate: true });
-                    }
-                  }
-                }}
+                variant={
+                  currentType === "reminder"
+                    ? "default"
+                    : "secondary"
+                }
+                className={`flex-1 ${currentType === "reminder"
+                  ? "bg-amber-500 text-white hover:bg-amber-600"
+                  : ""
+                  }`}
+                onClick={handleSelectReminder}
               >
                 ⏰ Reminder
               </Button>
+
               <Button
                 type="button"
-                variant={currentType === "list" ? "default" : "secondary"}
-                className={`flex-1 ${currentType === "list" ? "bg-emerald-600 text-white hover:bg-emerald-700" : ""}`}
-                onClick={() => setValue("type", "list", { shouldValidate: true })}
+                variant={
+                  currentType === "list"
+                    ? "default"
+                    : "secondary"
+                }
+                className={`flex-1 ${currentType === "list"
+                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                  : ""
+                  }`}
+                onClick={() =>
+                  setValue("type", "list", {
+                    shouldValidate: true,
+                  })
+                }
               >
                 ✓ Checklist
               </Button>
             </div>
           </div>
 
-          {/* Title Field with Zod Validation */}
+          {/* Title */}
           <FormField
             control={form.control}
             name="title"
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Title</FormLabel>
+
                 <FormControl>
-                  <Input placeholder="Item title..." {...field} />
+                  <Input
+                    placeholder="Item title..."
+                    {...field}
+                  />
                 </FormControl>
+
                 <FormMessage />
               </FormItem>
             )}
           />
 
-          {/* Audio Player if present */}
+          {/* Audio Player */}
           {itemData.audioPreviewUrl && (
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500">
                   Original Voice Recording
                 </label>
-                {itemData.audioDuration && itemData.audioDuration > 0 ? (
+
+                {itemData.audioDuration &&
+                  itemData.audioDuration > 0 ? (
                   <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-mono font-bold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
                     ⏱ {formatAudioDuration(itemData.audioDuration)}
                   </span>
                 ) : null}
               </div>
+
               <AudioPlayer
                 src={itemData.audioPreviewUrl}
                 initialDuration={itemData.audioDuration}
@@ -353,7 +501,7 @@ export function ItemPreviewDialog({
             </div>
           )}
 
-          {/* Details / Content Field with Zod Validation */}
+          {/* Content */}
           <FormField
             control={form.control}
             name="content"
@@ -361,12 +509,14 @@ export function ItemPreviewDialog({
               <FormItem>
                 <div className="flex items-center justify-between">
                   <FormLabel>Details / Content</FormLabel>
+
                   <span className="text-[11px] text-zinc-400">
                     {currentType === "list"
                       ? "Optional note for checklist"
                       : "Notes & details"}
                   </span>
                 </div>
+
                 <FormControl>
                   <Textarea
                     rows={4}
@@ -375,12 +525,13 @@ export function ItemPreviewDialog({
                     {...field}
                   />
                 </FormControl>
+
                 <FormMessage />
               </FormItem>
             )}
           />
 
-          {/* Due date picker with Zod validation for Reminders */}
+          {/* Reminder Date and Recurrence */}
           {currentType === "reminder" && (
             <div className="space-y-3">
               <FormField
@@ -388,52 +539,72 @@ export function ItemPreviewDialog({
                 name="dueDateString"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Due Date & 12-Hour Time (AM / PM)</FormLabel>
+                    <FormLabel>
+                      Due Date & 12-Hour Time (AM / PM)
+                    </FormLabel>
+
                     <FormControl>
                       <DateTimePicker12h
                         value={field.value}
                         onChange={field.onChange}
                       />
                     </FormControl>
+
                     <FormMessage />
                   </FormItem>
                 )}
               />
 
-              {/* Recurrence Frequency (Once, Daily, Custom Days) */}
               <RecurrenceSelector
                 mode={currentRecurrenceMode}
                 selectedDays={currentRecurrenceDays}
                 onChangeMode={(mode) => {
-                  setValue("recurrenceMode", mode, { shouldValidate: true });
-                  setValue("isDaily", mode === "daily", { shouldValidate: true });
+                  setValue("recurrenceMode", mode, {
+                    shouldValidate: true,
+                  });
+
+                  setValue("isDaily", mode === "daily", {
+                    shouldValidate: true,
+                  });
                 }}
                 onChangeDays={(days) => {
-                  setValue("recurrenceDays", days, { shouldValidate: true });
+                  setValue("recurrenceDays", days, {
+                    shouldValidate: true,
+                  });
                 }}
               />
             </div>
           )}
 
-          {/* Checklist items for Lists */}
+          {/* Checklist Items */}
           {currentType === "list" && (
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
                 Checklist Items
               </label>
+
               <div className="space-y-2">
                 {currentChecklist.map((item) => (
-                  <div key={item.id} className="flex items-center gap-2">
+                  <div
+                    key={item.id}
+                    className="flex items-center gap-2"
+                  >
                     <Input
                       value={item.text}
                       onChange={(e) =>
-                        handleUpdateChecklistItem(item.id, e.target.value)
+                        handleUpdateChecklistItem(
+                          item.id,
+                          e.target.value
+                        )
                       }
                       className="flex-1 h-8"
                     />
+
                     <button
                       type="button"
-                      onClick={() => handleRemoveChecklistItem(item.id)}
+                      onClick={() =>
+                        handleRemoveChecklistItem(item.id)
+                      }
                       className="rounded-lg p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
                     >
                       ✕
@@ -445,7 +616,9 @@ export function ItemPreviewDialog({
                   <Input
                     placeholder="Add checklist item..."
                     value={newChecklistText}
-                    onChange={(e) => setNewChecklistText(e.target.value)}
+                    onChange={(e) =>
+                      setNewChecklistText(e.target.value)
+                    }
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
@@ -454,6 +627,7 @@ export function ItemPreviewDialog({
                     }}
                     className="flex-1 h-8"
                   />
+
                   <Button
                     type="button"
                     variant="secondary"
@@ -472,6 +646,7 @@ export function ItemPreviewDialog({
             <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
               Tags
             </label>
+
             <div className="flex flex-wrap gap-1.5">
               {currentTags.map((tag) => (
                 <span
@@ -479,6 +654,7 @@ export function ItemPreviewDialog({
                   className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300"
                 >
                   {tag}
+
                   <button
                     type="button"
                     onClick={() => handleRemoveTag(tag)}
@@ -488,12 +664,15 @@ export function ItemPreviewDialog({
                   </button>
                 </span>
               ))}
+
               <div className="flex items-center gap-1">
                 <input
                   type="text"
                   placeholder="#add-tag"
                   value={newTagInput}
-                  onChange={(e) => setNewTagInput(e.target.value)}
+                  onChange={(e) =>
+                    setNewTagInput(e.target.value)
+                  }
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
@@ -506,6 +685,7 @@ export function ItemPreviewDialog({
             </div>
           </div>
 
+          {/* Footer */}
           <DialogFooter>
             <Button
               type="button"
@@ -515,6 +695,7 @@ export function ItemPreviewDialog({
             >
               Cancel
             </Button>
+
             <Button type="submit" disabled={isSaving}>
               {isSaving ? "Saving..." : "Save Item"}
             </Button>

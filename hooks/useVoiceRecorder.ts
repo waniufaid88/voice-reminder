@@ -338,63 +338,147 @@ export function useVoiceRecorder() {
       }
       const calculatedDuration = Math.max(1, Math.round(totalMs / 1000));
 
-      // Terminate speech recognition immediately and detach listeners so it NEVER restarts
-      if (speechRecognitionRef.current) {
-        try {
-          speechRecognitionRef.current.onend = null;
-          speechRecognitionRef.current.onerror = null;
-          speechRecognitionRef.current.onresult = null;
-          speechRecognitionRef.current.stop();
-        } catch {}
-        speechRecognitionRef.current = null;
-      }
-
+      // Flush final audio buffer from MediaRecorder before stopping
       if (
-        !mediaRecorderRef.current ||
-        mediaRecorderRef.current.state === "inactive"
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state === "recording"
       ) {
-        setIsRecording(false);
-        setIsPaused(false);
-        isStoppingRef.current = false;
-        resolve(null);
-        return;
+        try {
+          mediaRecorderRef.current.requestData();
+        } catch {}
       }
 
-      mediaRecorderRef.current.onstop = () => {
-        const rawMime = mediaRecorderRef.current?.mimeType || "audio/webm";
-        // Strip codec parameter to prevent Whisper API format rejection
-        const baseMime = rawMime.split(";")[0].trim() || "audio/webm";
-        const blob = new Blob(audioChunksRef.current, { type: baseMime });
-        const url = URL.createObjectURL(blob);
-        const finalTranscript = speechTranscriptRef.current.trim();
+      // Step 1: Wait for any pending final speech recognition results before shutting it down
+      const waitForSpeechRecognition = (): Promise<void> => {
+        return new Promise((done) => {
+          const recognition = speechRecognitionRef.current;
+          if (!recognition) {
+            done();
+            return;
+          }
 
-        // Cleanup audio stream
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((track) => track.stop());
-          streamRef.current = null;
-        }
-        if (
-          audioContextRef.current &&
-          audioContextRef.current.state !== "closed"
-        ) {
-          audioContextRef.current.close().catch(() => {});
-        }
-        analyserRef.current = null;
-        setAnalyser(null);
+          let hasFinished = false;
+          const finishRecognition = () => {
+            if (hasFinished) return;
+            hasFinished = true;
+            try {
+              recognition.onresult = null;
+              recognition.onerror = null;
+              recognition.onend = null;
+              recognition.stop();
+            } catch {}
+            speechRecognitionRef.current = null;
+            done();
+          };
 
-        setIsRecording(false);
-        setIsPaused(false);
-        isStoppingRef.current = false;
+          // Capture final speech recognition results delivered while stopping
+          recognition.onresult = (event: BrowserSpeechEvent) => {
+            let interimText = "";
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              const res = event.results[i];
+              const text = res[0]?.transcript || "";
+              if (res.isFinal) {
+                accumulatedFinalTranscriptRef.current = mergeTranscripts(
+                  accumulatedFinalTranscriptRef.current,
+                  text
+                );
+              } else {
+                interimText += text;
+              }
+            }
 
-        resolve({
-          blob,
-          duration: calculatedDuration,
-          url,
-          browserTranscript: finalTranscript,
+            const currentDisplay = mergeTranscripts(
+              accumulatedFinalTranscriptRef.current,
+              interimText
+            );
+            speechTranscriptRef.current = currentDisplay;
+            setLiveTranscript(currentDisplay);
+          };
+
+          // onend signals speech recognition has finished delivering all buffered audio results
+          recognition.onend = () => {
+            if (speechTranscriptRef.current) {
+              accumulatedFinalTranscriptRef.current = mergeTranscripts(
+                accumulatedFinalTranscriptRef.current,
+                speechTranscriptRef.current
+              );
+            }
+            finishRecognition();
+          };
+
+          recognition.onerror = () => {
+            finishRecognition();
+          };
+
+          try {
+            recognition.stop();
+          } catch {
+            finishRecognition();
+          }
+
+          // Safety timeout (800ms) so stopping is never delayed if browser speech recognition hangs
+          setTimeout(() => {
+            finishRecognition();
+          }, 800);
         });
       };
 
-      mediaRecorderRef.current.stop();
+      // Step 2: Once speech recognition finalizes, stop MediaRecorder and package the result
+      waitForSpeechRecognition().then(() => {
+        if (
+          !mediaRecorderRef.current ||
+          mediaRecorderRef.current.state === "inactive"
+        ) {
+          setIsRecording(false);
+          setIsPaused(false);
+          isStoppingRef.current = false;
+          resolve(null);
+          return;
+        }
+
+        mediaRecorderRef.current.onstop = () => {
+          const rawMime = mediaRecorderRef.current?.mimeType || "audio/webm";
+          // Strip codec parameter to prevent Whisper API format rejection
+          const baseMime = rawMime.split(";")[0].trim() || "audio/webm";
+          const blob = new Blob(audioChunksRef.current, { type: baseMime });
+          const url = URL.createObjectURL(blob);
+          const finalTranscript = speechTranscriptRef.current.trim();
+
+          // Cleanup audio stream
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach((track) => track.stop());
+            streamRef.current = null;
+          }
+          if (
+            audioContextRef.current &&
+            audioContextRef.current.state !== "closed"
+          ) {
+            audioContextRef.current.close().catch(() => {});
+          }
+          analyserRef.current = null;
+          setAnalyser(null);
+
+          setIsRecording(false);
+          setIsPaused(false);
+          isStoppingRef.current = false;
+
+          resolve({
+            blob,
+            duration: calculatedDuration,
+            url,
+            browserTranscript: finalTranscript,
+          });
+        };
+
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {
+          setIsRecording(false);
+          setIsPaused(false);
+          isStoppingRef.current = false;
+          resolve(null);
+        }
+      });
     });
   }, []);
 
