@@ -1,4 +1,6 @@
+
 import { NextRequest, NextResponse } from "next/server";
+
 import {
   parseNaturalReminder,
   parseMultipleReminders,
@@ -7,15 +9,35 @@ import {
   generateSmartListInfo,
   generateSmartNoteInfo,
 } from "@/lib/natural-date-parser";
+
 import { parseLocalDatetime } from "@/lib/date-utils";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1";
 const GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3-turbo";
 const GROQ_CHAT_MODEL = "llama-3.3-70b-versatile";
 
-/**
- * Normalize audio MIME types and extensions for Groq transcription.
- */
+type ItemType = "note" | "reminder" | "list";
+type RecurrenceMode = "once" | "daily" | "custom";
+
+type ChecklistItem = {
+  id: string;
+  text: string;
+  completed: boolean;
+};
+
+type FormattedItem = {
+  type: ItemType;
+  title: string;
+  content: string;
+  dueDate?: number;
+  dueDateLocal?: string;
+  recurrenceMode: RecurrenceMode;
+  recurrenceDays?: number[];
+  isDaily: boolean;
+  checklist?: ChecklistItem[];
+  tags: string[];
+};
+
 function getGroqMimeAndExt(
   rawMime: string,
   originalName?: string
@@ -56,139 +78,242 @@ function getGroqMimeAndExt(
     return { mime: "audio/flac", ext: "recording.flac" };
   }
 
-  // Android Chrome commonly records WebM/Opus.
   return { mime: "audio/webm", ext: "recording.webm" };
 }
 
 /**
- * Detect explicit list-creation or list-management intent.
- *
- * Commas and the word "and" do not automatically mean a list.
+ * Detect an actual reminder request.
+ */
+function hasExplicitReminderIntent(rawText: string): boolean {
+  const text = rawText.toLowerCase().trim();
+
+  return (
+    /\bremind\s+me\b/.test(text) ||
+    /\bset\s+(?:a\s+)?reminder\b/.test(text) ||
+    /\bdon't\s+let\s+me\s+forget\b/.test(text) ||
+    /\bdo\s+not\s+let\s+me\s+forget\b/.test(text) ||
+    /\balert\s+me\b/.test(text)
+  );
+}
+
+/**
+ * Detect list intent without treating every sentence
+ * containing "and" or commas as a list.
  */
 function hasExplicitListIntent(rawText: string): boolean {
   const text = rawText.toLowerCase().trim();
 
-  // Direct shopping or purchasing instructions.
-  if (/^(?:please\s+)?(?:buy|purchase|pick up)\b/.test(text)) {
-    return true;
-  }
+  const patterns = [
+    // Shopping and purchasing.
+    /\b(?:buy|purchase|pick\s+up)\b/,
+    /\b(?:need|have|want)\s+to\s+buy\b/,
+    /\b(?:shopping|grocery)\s+list\b/,
 
-  // Explicitly create or prepare a list/checklist.
-  if (
-    /\b(?:make|create|prepare|start)\s+(?:(?:a|an)\s+)?(?:(?:shopping|grocery|packing|todo|to-do|task)\s+)?(?:list|checklist)\b/.test(
-      text
-    )
-  ) {
-    return true;
-  }
+    // Packing.
+    /\bthings?\s+to\s+pack\b/,
+    /\bitems?\s+to\s+pack\b/,
+    /\bpacking\s+list\b/,
+    /\bthings?\s+to\s+bring\b/,
 
-  if (
-    /\b(?:make|create|prepare)\s+(?:a\s+)?list\s+of\b/.test(text)
-  ) {
-    return true;
-  }
+    // Explicit lists and checklists.
+    /\b(?:make|create|prepare|start)\s+(?:(?:a|an|my|the)\s+)?(?:(?:shopping|grocery|packing|todo|to-do|task|work)\s+)?(?:list|checklist)\b/,
+    /\bchecklist\b/,
+    /\b(?:my|the)\s+(?:shopping|grocery|packing)\s+list\b/,
 
-  // Add items to an existing list.
-  if (
-    /\b(?:add|put|include)\b.*\b(?:to|in|on)\s+(?:(?:my|the)\s+)?(?:(?:shopping|grocery|packing|todo|to-do|task)\s+)?(?:list|checklist)\b/.test(
-      text
-    )
-  ) {
-    return true;
-  }
+    // Add items to any named list.
+    /\b(?:add|put|include)\b.+\b(?:to|in|on)\s+(?:(?:my|the)\s+)?[\w-]+(?:\s+[\w-]+){0,5}\s+lists?\b/,
 
-  if (
-    /\b(?:make|create|prepare)\s+(?:me\s+)?(?:a\s+)?checklist\b/.test(
-      text
-    )
-  ) {
-    return true;
-  }
+    // Create a specifically named list.
+    /\b(?:create|make|start|prepare)\s+(?:a|an|my|the)\s+[\w-]+(?:\s+[\w-]+){0,5}\s+lists?\b/,
 
-  return false;
+    // A named list explicitly mentioned.
+    /\b(?:my|the)\s+[\w-]+(?:\s+[\w-]+){0,5}\s+lists?\b/,
+
+    // Daily task collections.
+    /\bmy\s+daily\s+tasks?\s+(?:are|include|:)\b/,
+    /\bmy\s+tasks?\s+(?:are|include|:)\b/,
+
+    // Plans containing actionable activities.
+    /\bmy\s+weekend\s+plan\s*:/,
+    /\bmy\s+daily\s+plan\s*:/,
+  ];
+
+  return patterns.some((pattern) => pattern.test(text));
 }
 
 /**
- * Rule-based fallback when Groq chat is unavailable.
+ * Deterministically extract items from sentences like:
  *
- * Priority:
- * 1. Reminder
- * 2. Explicit list
- * 3. Note
+ * "Add notebook, pen and pencil to my school supplies list."
+ *
+ * This avoids relying entirely on AI to extract checklist items.
+ */
+function extractItemsFromAddToList(
+  rawText: string
+): { title: string; items: ChecklistItem[] } | null {
+  const match = rawText.match(
+    /^\s*(?:please\s+)?(?:add|put|include)\s+(.+?)\s+(?:to|in|on)\s+(?:(?:my|the)\s+)?(.+?)\s+lists?\s*[.!?]*$/i
+  );
+
+  if (!match) return null;
+
+  const rawItems = match[1].trim();
+  const rawListName = match[2].trim();
+
+  if (!rawItems || !rawListName) return null;
+
+  const items = rawItems
+    .replace(/\s+and\s+/gi, ",")
+    .replace(/\s*&\s*/g, ",")
+    .split(",")
+    .map((item) =>
+      item.replace(/^[\s,]+|[\s,.!?]+$/g, "").trim()
+    )
+    .filter(Boolean);
+
+  if (items.length === 0) return null;
+
+  const title = rawListName
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+  return {
+    title,
+    items: items.map((item, index) => ({
+      id: String(index + 1),
+      text: item,
+      completed: false,
+    })),
+  };
+}
+
+/**
+ * Validate checklist items returned by Groq or the rule-based parser.
+ */
+function normalizeChecklist(value: unknown): ChecklistItem[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item, index) => {
+      if (typeof item === "string") {
+        const text = item.trim();
+
+        if (!text) return null;
+
+        return {
+          id: String(index + 1),
+          text,
+          completed: false,
+        };
+      }
+
+      if (!item || typeof item !== "object") return null;
+
+      const entry = item as Record<string, unknown>;
+      const itemText = String(entry.text || "").trim();
+
+      if (!itemText) return null;
+
+      return {
+        id: String(entry.id || index + 1),
+        text: itemText,
+        completed: Boolean(entry.completed),
+      };
+    })
+    .filter((item): item is ChecklistItem => item !== null);
+}
+
+/**
+ * Convert reminder parser results into the application's format.
+ */
+function formatRuleBasedReminders(
+  rawText: string,
+  refDate: Date,
+  timezoneOffset?: number
+): FormattedItem[] {
+  const reminders = parseMultipleReminders(
+    rawText,
+    refDate,
+    timezoneOffset
+  );
+
+  if (!reminders || reminders.length <= 1) {
+    return [];
+  }
+
+  return reminders.map((reminder) => {
+    const isDaily = reminder.recurrenceMode === "daily";
+
+    return {
+      type: "reminder",
+      title: reminder.title || "Reminder",
+      content: cleanReminderContent(
+        reminder.title +
+        (reminder.dueDateLocal
+          ? ` scheduled for ${reminder.dueDateLocal}`
+          : "")
+      ),
+      dueDate: reminder.dueDate,
+      dueDateLocal: reminder.dueDateLocal,
+      recurrenceMode: reminder.recurrenceMode || "once",
+      recurrenceDays: reminder.recurrenceDays,
+      isDaily,
+      checklist: undefined,
+      tags: ["#reminder", isDaily ? "#daily" : "#task"],
+    };
+  });
+}
+
+/**
+ * Rule-based fallback when Groq is unavailable.
  */
 function parseTextRuleBased(
   rawText: string,
   refDate: Date = new Date(),
   clientTimezoneOffset?: number
 ) {
-  // Explicit checklist or shopping intent is never split into multiple reminders
-  if (hasExplicitListIntent(rawText)) {
-    const listInfo = generateSmartListInfo(rawText);
-    const listItem = {
-      type: "list" as const,
-      title: listInfo.title,
-      content: listInfo.content,
-      dueDate: undefined,
-      dueDateLocal: undefined,
-      recurrenceMode: "once" as const,
-      recurrenceDays: undefined,
-      isDaily: false,
-      checklist: listInfo.checklist,
-      tags: ["#list", "#shopping"],
-    };
-    return {
-      ...listItem,
-      items: [listItem],
-    };
-  }
-
-  // Check for multiple distinct reminders (e.g. joined by "then", "and then", "after that", etc.)
-  const multi = parseMultipleReminders(rawText, refDate, clientTimezoneOffset);
-  if (multi && multi.length > 1) {
-    const formattedItems = multi.map((m) => {
-      const isDaily = m.recurrenceMode === "daily";
-      return {
-        type: "reminder" as const,
-        title: m.title || "Reminder",
-        content: cleanReminderContent(
-          m.title + (m.dueDateLocal ? ` scheduled for ${m.dueDateLocal}` : "")
-        ),
-        dueDate: m.dueDate,
-        dueDateLocal: m.dueDateLocal,
-        recurrenceMode: m.recurrenceMode || "once",
-        recurrenceDays: m.recurrenceDays,
-        isDaily,
-        checklist: undefined,
-        tags: ["#reminder", isDaily ? "#daily" : "#task"],
-      };
-    });
-
-    return {
-      type: "reminder" as const,
-      title: formattedItems[0].title,
-      content: cleanReminderContent(rawText),
-      dueDate: formattedItems[0].dueDate,
-      dueDateLocal: formattedItems[0].dueDateLocal,
-      recurrenceMode: formattedItems[0].recurrenceMode,
-      recurrenceDays: formattedItems[0].recurrenceDays,
-      isDaily: formattedItems[0].isDaily,
-      checklist: undefined,
-      tags: ["#reminder"],
-      items: formattedItems,
-    };
-  }
-
-  // Single reminder check
   const natural = parseNaturalReminder(
     rawText,
     refDate,
     clientTimezoneOffset
   );
 
-  if (natural.isReminder || natural.dueDate) {
-    const reminderItem = {
-      type: "reminder" as const,
-      title: natural.title,
+  const reminderIntent =
+    hasExplicitReminderIntent(rawText) ||
+    natural.isReminder ||
+    Boolean(natural.dueDate);
+
+  const listIntent =
+    !reminderIntent && hasExplicitListIntent(rawText);
+
+  // Reminder priority.
+  if (reminderIntent) {
+    const multiple = formatRuleBasedReminders(
+      rawText,
+      refDate,
+      clientTimezoneOffset
+    );
+
+    if (multiple.length > 1) {
+      return {
+        type: "reminder" as const,
+        title: multiple[0].title,
+        content: cleanReminderContent(rawText),
+        dueDate: multiple[0].dueDate,
+        dueDateLocal: multiple[0].dueDateLocal,
+        recurrenceMode: multiple[0].recurrenceMode,
+        recurrenceDays: multiple[0].recurrenceDays,
+        isDaily: false,
+        checklist: undefined,
+        tags: ["#reminder"],
+        items: multiple,
+      };
+    }
+
+    const reminderItem: FormattedItem = {
+      type: "reminder",
+      title: natural.title || cleanReminderTitle(rawText),
       content: cleanReminderContent(rawText),
       dueDate: natural.dueDate,
       dueDateLocal: natural.dueDateLocal,
@@ -201,20 +326,51 @@ function parseTextRuleBased(
         natural.recurrenceMode === "daily" ? "#daily" : "#task",
       ],
     };
+
     return {
       ...reminderItem,
       items: [reminderItem],
     };
   }
 
+  // List priority after reminders.
+  if (listIntent) {
+    const listInfo = generateSmartListInfo(rawText);
+    const extractedList = extractItemsFromAddToList(rawText);
+
+    const listItem: FormattedItem = {
+      type: "list",
+      title: extractedList?.title || listInfo.title,
+      content: extractedList
+        ? `Items to add to your ${extractedList.title} list.`
+        : listInfo.content,
+      dueDate: undefined,
+      dueDateLocal: undefined,
+      recurrenceMode: "once",
+      recurrenceDays: undefined,
+      isDaily: false,
+      checklist: extractedList
+        ? extractedList.items
+        : normalizeChecklist(listInfo.checklist),
+      tags: ["#list", "#voice"],
+    };
+
+    return {
+      ...listItem,
+      items: [listItem],
+    };
+  }
+
+  // Everything else is a note.
   const noteInfo = generateSmartNoteInfo(rawText);
-  const noteItem = {
-    type: "note" as const,
+
+  const noteItem: FormattedItem = {
+    type: "note",
     title: noteInfo.title,
     content: noteInfo.content,
     dueDate: undefined,
     dueDateLocal: undefined,
-    recurrenceMode: "once" as const,
+    recurrenceMode: "once",
     recurrenceDays: undefined,
     isDaily: false,
     checklist: undefined,
@@ -233,19 +389,19 @@ export async function POST(req: NextRequest) {
 
   let rawText = "";
   let fallbackText = "";
+
   let clientTimezone = "";
-  let clientTimezoneOffset: number | undefined = undefined;
+  let clientTimezoneOffset: number | undefined;
   let clientNowISO = "";
   let clientNowLocal = "";
+
   let transcriptionError: string | null = null;
 
   let usedGroqTranscription = false;
   let usedGroqStructuring = false;
 
   try {
-    // --------------------------------------------------
     // STEP 1: Get text from audio or direct text input.
-    // --------------------------------------------------
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
@@ -259,14 +415,10 @@ export async function POST(req: NextRequest) {
 
       const offsetRaw = formData.get("clientTimezoneOffset");
 
-      if (
-        offsetRaw !== null &&
-        offsetRaw !== undefined &&
-        offsetRaw !== ""
-      ) {
-        const parsedOffset = parseInt(offsetRaw as string, 10);
+      if (offsetRaw !== null && offsetRaw !== "") {
+        const parsedOffset = Number(offsetRaw);
 
-        if (!isNaN(parsedOffset)) {
+        if (Number.isFinite(parsedOffset)) {
           clientTimezoneOffset = parsedOffset;
         }
       }
@@ -276,67 +428,47 @@ export async function POST(req: NextRequest) {
           transcriptionError =
             "GROQ_API_KEY environment variable is not configured.";
 
-          console.warn("[/api/ai/process]", transcriptionError);
-
           if (fallbackText.trim()) {
             rawText = fallbackText.trim();
           }
         } else {
-          // ----------------------------------------------
-          // STEP 1A: Transcribe audio using Groq.
-          // ----------------------------------------------
-
           try {
-            const { mime: cleanMime, ext: cleanExt } =
-              getGroqMimeAndExt(
-                audioFile.type,
-                (audioFile as File).name
-              );
+            const { mime, ext } = getGroqMimeAndExt(
+              audioFile.type,
+              (audioFile as File).name
+            );
 
-            const arrayBuffer = await audioFile.arrayBuffer();
-            const audioBytes = new Uint8Array(arrayBuffer);
+            const audioBytes = new Uint8Array(
+              await audioFile.arrayBuffer()
+            );
 
-            console.log("[/api/ai/process] Audio received:", {
+            console.log("[AI] Audio received:", {
               originalType: audioFile.type,
-              uploadType: cleanMime,
-              filename: cleanExt,
+              uploadType: mime,
               sizeBytes: audioBytes.byteLength,
-              fallbackTextLength: fallbackText.trim().length,
+              fallbackTextLength: fallbackText.length,
             });
 
             if (audioBytes.byteLength === 0) {
-              transcriptionError =
-                "Audio recording file is empty (0 bytes).";
-
-              console.warn(
-                "[/api/ai/process]",
-                transcriptionError
-              );
+              transcriptionError = "Audio recording file is empty.";
 
               if (fallbackText.trim()) {
                 rawText = fallbackText.trim();
               }
             } else {
-              const fileToUpload = new File(
-                [audioBytes],
-                cleanExt,
-                { type: cleanMime }
-              );
+              const file = new File([audioBytes], ext, { type: mime });
 
               const transcriptionFormData = new FormData();
 
-              transcriptionFormData.append("file", fileToUpload);
+              transcriptionFormData.append("file", file);
               transcriptionFormData.append(
                 "model",
                 GROQ_TRANSCRIPTION_MODEL
               );
-              transcriptionFormData.append(
-                "response_format",
-                "json"
-              );
+              transcriptionFormData.append("response_format", "json");
               transcriptionFormData.append(
                 "prompt",
-                "Voice reminder, meeting, appointment, checklist, grocery list, task, note."
+                "Voice reminders, meetings, appointments, shopping lists, packing lists, checklists, tasks, notes and personal thoughts."
               );
 
               const transcriptionRes = await fetch(
@@ -351,13 +483,10 @@ export async function POST(req: NextRequest) {
               );
 
               if (transcriptionRes.ok) {
-                const transcriptionData =
-                  await transcriptionRes.json();
-
+                const transcriptionData = await transcriptionRes.json();
                 const transcriptionText =
                   (transcriptionData.text || "").trim();
 
-                // Filter common silence hallucinations.
                 const isHallucination =
                   /^(?:thanks for watching|thank you for watching|subscribe|you|bye|\.)\.?$/i.test(
                     transcriptionText
@@ -366,13 +495,6 @@ export async function POST(req: NextRequest) {
                 if (transcriptionText && !isHallucination) {
                   rawText = transcriptionText;
                   usedGroqTranscription = true;
-
-                  console.log(
-                    "[/api/ai/process] Groq transcription successful:",
-                    {
-                      transcriptLength: rawText.length,
-                    }
-                  );
                 } else if (fallbackText.trim()) {
                   rawText = fallbackText.trim();
                 }
@@ -383,34 +505,22 @@ export async function POST(req: NextRequest) {
 
                 transcriptionError =
                   errorData?.error?.message ||
-                  `Groq transcription API responded with HTTP ${transcriptionRes.status}.`;
+                  `Groq transcription failed: HTTP ${transcriptionRes.status}`;
 
-                console.error(
-                  "[/api/ai/process] Groq transcription error:",
-                  {
-                    status: transcriptionRes.status,
-                    error: errorData,
-                  }
-                );
+                console.error("[AI] Transcription error:", errorData);
 
                 if (fallbackText.trim()) {
                   rawText = fallbackText.trim();
                 }
               }
             }
-          } catch (transcriptionErr: unknown) {
-            const message =
-              transcriptionErr instanceof Error
-                ? transcriptionErr.message
-                : String(transcriptionErr);
-
+          } catch (error) {
             transcriptionError =
-              `Failed to contact Groq transcription API: ${message}`;
+              error instanceof Error
+                ? error.message
+                : "Transcription failed.";
 
-            console.error(
-              "[/api/ai/process] Transcription request failed:",
-              transcriptionErr
-            );
+            console.error("[AI] Transcription request failed:", error);
 
             if (fallbackText.trim()) {
               rawText = fallbackText.trim();
@@ -421,7 +531,6 @@ export async function POST(req: NextRequest) {
         rawText = fallbackText.trim();
       }
     } else {
-      // Direct text input.
       const json = await req.json();
 
       rawText = json.text || "";
@@ -434,18 +543,20 @@ export async function POST(req: NextRequest) {
         json.clientTimezoneOffset !== undefined &&
         json.clientTimezoneOffset !== null
       ) {
-        const parsedOffset = Number(json.clientTimezoneOffset);
+        const offset = Number(json.clientTimezoneOffset);
 
-        if (!isNaN(parsedOffset)) {
-          clientTimezoneOffset = parsedOffset;
+        if (Number.isFinite(offset)) {
+          clientTimezoneOffset = offset;
         }
       }
     }
 
-    // Use browser transcript if audio transcription was empty.
+    // Use browser transcription if Groq transcription failed.
     if (!rawText.trim() && fallbackText.trim()) {
       rawText = fallbackText.trim();
-    } else if (
+    }
+
+    if (
       rawText.trim().length < 4 &&
       fallbackText.trim().length > rawText.trim().length
     ) {
@@ -453,26 +564,26 @@ export async function POST(req: NextRequest) {
     }
 
     if (!rawText.trim()) {
-      const errorMessage = transcriptionError
-        ? `Audio transcription failed: ${transcriptionError}`
-        : "No voice could be transcribed. Please speak clearly or check microphone permissions.";
-
       return NextResponse.json(
         {
-          error: errorMessage,
+          error: transcriptionError
+            ? `Audio transcription failed: ${transcriptionError}`
+            : "No voice could be transcribed. Please speak clearly or check microphone permissions.",
           detail: transcriptionError,
         },
         { status: 400 }
       );
     }
 
-    // --------------------------------------------------
-    // STEP 2: Prepare date and timezone information.
-    // --------------------------------------------------
+    // STEP 2: Prepare timezone and classification.
 
-    const refDate = clientNowISO
+    const parsedClientDate = clientNowISO
       ? new Date(clientNowISO)
       : new Date();
+
+    const refDate = Number.isNaN(parsedClientDate.getTime())
+      ? new Date()
+      : parsedClientDate;
 
     const natural = parseNaturalReminder(
       rawText,
@@ -480,11 +591,23 @@ export async function POST(req: NextRequest) {
       clientTimezoneOffset
     );
 
-    const explicitListIntent = hasExplicitListIntent(rawText);
+    const reminderIntent =
+      hasExplicitReminderIntent(rawText) ||
+      natural.isReminder ||
+      Boolean(natural.dueDate);
 
-    // --------------------------------------------------
-    // STEP 3: Structure input using Groq chat API.
-    // --------------------------------------------------
+    const explicitListIntent =
+      !reminderIntent && hasExplicitListIntent(rawText);
+
+    console.log("[AI] Input classification:", {
+      rawText,
+      reminderIntent,
+      listIntent: explicitListIntent,
+      naturalReminder: natural.isReminder,
+      dueDate: natural.dueDateLocal,
+    });
+
+    // STEP 3: Structure input using Groq.
 
     if (groqApiKey) {
       try {
@@ -493,7 +616,6 @@ export async function POST(req: NextRequest) {
 
         const userTz = clientTimezone || "User Local Time";
 
-        // Calculate wall-clock date in the user's timezone.
         const userWallClock =
           clientTimezoneOffset !== undefined
             ? new Date(
@@ -527,13 +649,11 @@ export async function POST(req: NextRequest) {
           "December",
         ];
 
-        const todayDayName =
-          dayNames[userWallClock.getUTCDay()];
+        const formatLocalDate = (date: Date) =>
+          `${monthNames[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()}`;
 
-        const todayDateStr =
-          `${monthNames[userWallClock.getUTCMonth()]} ` +
-          `${userWallClock.getUTCDate()}, ` +
-          `${userWallClock.getUTCFullYear()}`;
+        const todayDayName = dayNames[userWallClock.getUTCDay()];
+        const todayDateStr = formatLocalDate(userWallClock);
 
         const tomorrowWallClock = new Date(
           userWallClock.getTime() + 24 * 60 * 60 * 1000
@@ -543,150 +663,325 @@ export async function POST(req: NextRequest) {
           dayNames[tomorrowWallClock.getUTCDay()];
 
         const tomorrowDateStr =
-          `${monthNames[tomorrowWallClock.getUTCMonth()]} ` +
-          `${tomorrowWallClock.getUTCDate()}, ` +
-          `${tomorrowWallClock.getUTCFullYear()}`;
+          formatLocalDate(tomorrowWallClock);
 
-        const systemPrompt = `You are an intelligent assistant that categorizes raw user thoughts and voice transcriptions into one of three formats.
+        const systemPrompt = `
+You are an intelligent assistant for a voice-based reminder, note and checklist application.
 
-CLASSIFICATION RULES:
+Classify every input into exactly one category:
+note, reminder, or list.
 
-1. "note":
-- General thoughts, ideas, journal entries, experiences, opinions, and informational content.
-- Personal goals, learning goals, and things the user wants to achieve.
-- Statements describing multiple subjects, technologies, skills, or experiences.
-- A sentence containing commas or the word "and" is still a note unless the user explicitly requests a list.
-- Goals with a general timeframe, such as "this month", are notes unless the user explicitly requests a reminder.
+CURRENT USER TIME:
+${userLocalString}
 
-Examples:
-"I want to learn Next.js, TypeScript and PostgreSQL this month." -> note
-"I want to improve my JavaScript and React skills." -> note
-"I learned HTML, CSS and JavaScript today." -> note
-"My goals are to improve coding and communication." -> note
-"I enjoy programming and learning new things." -> note
+TIMEZONE:
+${userTz}
 
-2. "reminder":
-- Explicit requests to be reminded about something.
-- Tasks, meetings, appointments, deadlines, and clearly scheduled future activities.
-- Actions with a specific date or time.
-- Reminder intent and scheduling take priority over list classification.
+TODAY:
+${todayDayName}, ${todayDateStr}
 
-Examples:
-"Remind me to study JavaScript tomorrow." -> reminder
-"Call John tomorrow at 5 PM." -> reminder
-"Tomorrow I have an important meeting at 3 PM." -> reminder
+TOMORROW:
+${tomorrowDayName}, ${tomorrowDateStr}
 
-3. "list":
-- Only when the user explicitly wants to create, prepare, or manage a list or checklist.
-- Shopping lists, grocery lists, packing lists, and task checklists.
-- Direct purchasing instructions such as "Buy milk, eggs and bread."
+====================================
+1. REMINDER CLASSIFICATION
+====================================
+
+Classify as reminder when:
+- The user explicitly says "remind me".
+- The user asks not to forget something.
+- The user specifies an appointment, meeting, task or activity with a date or time.
+- The user specifies a relative time such as after 30 minutes or in two hours.
+- The user specifies a recurrence such as every day.
 
 Examples:
-"Create a shopping list with milk, bread and eggs." -> list
-"Add milk and eggs to my shopping list." -> list
-"Make a checklist for my project tasks." -> list
-"Buy milk, bread and eggs." -> list
 
-CRITICAL CLASSIFICATION RULES:
-- Never classify something as a list simply because it contains "and".
-- Never classify something as a list simply because it contains commas.
-- Never classify learning goals or personal goals as lists.
-- Never classify a general goal as a reminder just because it mentions "this month" or another broad timeframe.
-- A list requires clear list-creation or list-management intent.
-- When uncertain between note and list, choose note.
-- Reminder intent and actual scheduling take priority over list classification.
-- Always understand the complete meaning and intention of the sentence before choosing its type.
+"Remind me to attend a meeting tomorrow at 10 AM."
+=> reminder, tomorrow 10:00
 
-CRITICAL USER TIMEZONE CONTEXT:
-- User's Current Local Time: ${userLocalString}
-- User's Timezone: ${userTz}
-- Today in user's timezone is: ${todayDayName}, ${todayDateStr}
-- Tomorrow in user's timezone is: ${tomorrowDayName}, ${tomorrowDateStr}
+"Remind me to call my mother today at 8 PM."
+=> reminder, today 20:00
 
-CRITICAL TITLE AND CONTENT RULES:
-The title and content MUST be completely different. Never use the complete original user sentence as the title.
+"Remind me to take my medicine every day at 9 AM."
+=> reminder, daily at 09:00
 
-1. NOTES:
-- Generate a short, meaningful title (2-5 words).
-- Content should contain the complete note with its important details in well-written prose.
+"Remind me to submit my project on Monday at 11 AM."
+=> reminder, Monday 11:00
 
-2. REMINDERS:
-- Generate a short, actionable title (2-5 words).
-- Do NOT include unnecessary phrases like "I have to", "I need to", "I must", or "Remind me".
-- Never put the date/time inside the title if the title already explains the action.
-- Content should clearly explain what the user needs to do, preserving important details and deadlines.
+"Remind me to pay the electricity bill on the 20th of this month."
+=> reminder, 20th of this month
 
-3. LISTS:
-- Generate a meaningful title describing the list.
-- Content should briefly describe the purpose of the list.
-- Put individual items inside the checklist array.
-- NEVER duplicate checklist items inside the title.
+"Remind me to drink water after 30 minutes."
+=> reminder, 30 minutes later
 
-RULES FOR REMINDER SCHEDULING:
-- Extract the EXACT time and day specified by the user.
-- "4:30 pm" -> 16:30.
-- "at 10 am" -> 10:00.
-- "tomorrow at 5 pm" -> tomorrow at 17:00.
-- "on Friday at 2 pm" -> upcoming Friday at 14:00.
-- If only a time is mentioned and that time today is in the future, set for today.
-- If only a time is mentioned and that time has passed today, set for tomorrow.
-- Output "dueDateLocal" strictly as "YYYY-MM-DDTHH:mm" in USER'S local time.
+"Remind me to attend my doctor's appointment next Friday at 4 PM."
+=> reminder, next Friday 16:00
 
-RECURRENCE RULES:
-- "daily", "every day", "everyday" -> "recurrenceMode": "daily".
-- "every weekday" -> "recurrenceMode": "custom", "recurrenceDays": [1,2,3,4,5].
-- "every weekend" -> "recurrenceMode": "custom", "recurrenceDays": [0,6].
-- Specific days (e.g. "every Monday and Friday") -> "recurrenceMode": "custom", "recurrenceDays": [1,5].
-- Day numbers are [0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat].
-- Otherwise "recurrenceMode": "once".
+"I have an interview tomorrow at 2:30 PM. Don't let me forget."
+=> reminder, tomorrow 14:30
 
-MULTIPLE REMINDERS DETECTION:
-- If the user mentions MULTIPLE distinct reminder tasks (e.g. joined by "then", "and then", "after that", "also", or multiple scheduled actions with their own dates/times):
-  Example: "Call my friend at 11:05 AM then I have to go to the market at 1:00 PM then I have to go for a walk at 7:30 PM."
-  -> This contains 3 distinct reminder tasks:
-     1. "Call my friend" at 11:05 AM
-     2. "Go to the market" at 1:00 PM
-     3. "Go for a walk" at 7:30 PM
-- You MUST detect EVERY separate reminder task and return each one inside the "items" array!
-- If the user mentions 2, 3, 5, or more reminders in one input, extract ALL of them into the "items" array.
-- For each reminder in "items":
-  - "type": "reminder"
-  - "title": Clean, short actionable title (e.g. "Call my friend", "Go to the market", "Go for a walk")
-  - "content": Clear description of that specific task (e.g. "Call my friend at 11:05 AM")
-  - "dueDateLocal": "YYYY-MM-DDTHH:mm" in user's local time
-  - "recurrenceMode": "once" | "daily" | "custom"
-  - "recurrenceDays": null or [days]
-  - "tags": ["#reminder", "#task"]
-- CRITICAL: Do NOT split notes or shopping checklists into multiple reminders!
-  - "Buy milk, eggs, bread and cheese" -> This is a SINGLE "list" item, NOT multiple reminders!
-  - "I learned Next.js and TypeScript today and practiced closures" -> This is a SINGLE "note", NOT reminders!
-  - Only create multiple reminder items when there are multiple distinct scheduled reminder tasks or time expressions.
-- If the input is a single reminder, single note, or single checklist, "items" should contain that 1 item.
+"Remind me to wake up early at 6 AM tomorrow."
+=> reminder, tomorrow 06:00
 
-Respond ONLY with valid JSON using this exact structure:
+"Remind me to complete my assignment in two hours."
+=> reminder, two hours later
+
+IMPORTANT:
+Do not classify a general learning goal or a general thought as a reminder merely because it contains a timeframe.
+
+"I want to learn Next.js this month."
+=> note
+
+====================================
+2. LIST CLASSIFICATION
+====================================
+
+Classify as list when the user:
+- Wants to buy or purchase multiple items.
+- Mentions things to pack or bring.
+- Creates a shopping or grocery list.
+- Creates a task checklist.
+- Describes a collection of actionable tasks.
+- Describes a weekend plan consisting of separate activities.
+- Asks to add items to an existing list.
+- Creates a specifically named list, such as school supplies list,
+  office supplies list, travel essentials list or books list.
+
+Examples:
+
+"Buy milk, eggs, bread and butter."
+=> list
+
+"Create a shopping list: rice, sugar, tea, coffee and salt."
+=> list
+
+"Things to pack for my trip: clothes, shoes, charger and passport."
+=> list
+
+"My daily tasks are exercise, meditation, reading and studying."
+=> list
+
+"Add apples, bananas, oranges and grapes to my grocery list."
+=> list
+
+"Create a checklist for my office work: check emails, attend meetings and submit reports."
+=> list
+
+"I need to buy a laptop, mouse, keyboard and headphones."
+=> list
+
+"Make a cleaning checklist: wash clothes, clean the kitchen and vacuum the room."
+=> list
+
+"My weekend plan: visit the market, clean my room and meet my friends."
+=> list
+
+"Add notebook, pen, pencil, eraser and ruler to my school supplies list."
+=> list
+
+"Create a school supplies list with notebook, pen and pencil."
+=> list
+
+"Add laptop, mouse and keyboard to my office supplies list."
+=> list
+
+"Add passport, charger and clothes to my travel essentials list."
+=> list
+
+For lists:
+- Generate a short meaningful title.
+- Put every individual item in checklist.
+- Each checklist item must be separate.
+- Do not put all checklist items into a single string.
+- Do not create reminders for individual checklist items.
+- Keep the content short and descriptive.
+- Preserve the user's named list category in the title.
+
+====================================
+3. NOTE CLASSIFICATION
+====================================
+
+Classify as note for:
+- General thoughts.
+- Learning experiences.
+- Ideas.
+- Opinions.
+- Journal entries.
+- Informational statements.
+- Learning goals.
+- Personal goals.
+- General descriptions.
+
+Examples:
+
+"Today I learned something interesting about JavaScript closures."
+=> note
+
+"React hooks help us manage state and side effects in functional components."
+=> note
+
+"My idea is to build a personal finance application that tracks monthly expenses."
+=> note
+
+"I watched a video about artificial intelligence and machine learning today."
+=> note
+
+"The meeting went well and we discussed the new project requirements."
+=> note
+
+"I want to learn Next.js, TypeScript and PostgreSQL this month."
+=> note
+
+"Sometimes the best way to learn programming is to build real projects."
+=> note
+
+"Today was a productive day. I completed my backend API and fixed several bugs."
+=> note
+
+"My project idea is to create an application that converts voice into organized notes and reminders."
+=> note
+
+"I learned that promises in JavaScript are used to handle asynchronous operations."
+=> note
+
+IMPORTANT:
+- Commas and "and" do not automatically indicate a list.
+- A learning goal is a note.
+- An idea is a note.
+- A collection of actionable activities can be a list.
+- When uncertain between a note and list, choose note.
+- Explicit reminder intent takes priority over list intent.
+
+====================================
+4. MULTIPLE REMINDERS
+====================================
+
+If the user describes multiple distinct reminder tasks, return every task in items.
+
+Example:
+
+"Call my friend at 11 AM then go to the market at 1 PM and walk at 7 PM."
+
+Return three separate reminders.
+
+Do not split:
+- Notes into reminders.
+- Shopping lists into reminders.
+- Packing lists into reminders.
+- Checklists into reminders.
+
+====================================
+5. DATE AND TIME RULES
+====================================
+
+Use the user's current local time and timezone.
+
+Output dueDateLocal in this exact format:
+
+YYYY-MM-DDTHH:mm
+
+Examples:
+- 10 AM => 10:00
+- 4:30 PM => 16:30
+- Tomorrow at 5 PM => tomorrow 17:00
+- Friday at 2 PM => upcoming Friday 14:00
+
+If only a time is provided:
+- Use today if that time has not passed.
+- Otherwise use tomorrow.
+
+For relative time:
+- After 30 minutes => current local time + 30 minutes.
+- In two hours => current local time + 2 hours.
+
+Do not invent dates or times.
+
+====================================
+6. RECURRENCE
+====================================
+
+- Every day => daily
+- Daily => daily
+- Every weekday => custom, [1,2,3,4,5]
+- Every weekend => custom, [0,6]
+- Every Monday and Friday => custom, [1,5]
+- Otherwise => once
+
+Day numbers:
+0 = Sunday
+1 = Monday
+2 = Tuesday
+3 = Wednesday
+4 = Thursday
+5 = Friday
+6 = Saturday
+
+====================================
+7. TITLE AND CONTENT
+====================================
+
+Notes:
+- Short title, preferably 2-5 words.
+- Content contains the complete important thought.
+
+Reminders:
+- Short actionable title.
+- Do not include unnecessary "Remind me" wording.
+- Content describes the task.
+
+Lists:
+- Meaningful title.
+- Content describes the purpose.
+- Individual items go in checklist.
+
+====================================
+8. OUTPUT
+====================================
+
+Respond ONLY with valid JSON.
+
+Use exactly this structure:
+
 {
-  "type": "note" | "reminder" | "list",
-  "title": "Short descriptive title",
-  "content": "Detailed, well-punctuated content",
-  "dueDateLocal": "YYYY-MM-DDTHH:mm" or null,
-  "recurrenceMode": "once" | "daily" | "custom",
-  "recurrenceDays": [1, 3] or null,
-  "checklist": [
-    { "id": "1", "text": "item description", "completed": false }
-  ],
-  "tags": ["#tag1", "#tag2"],
+  "type": "note",
+  "title": "Short title",
+  "content": "Description",
+  "dueDateLocal": null,
+  "recurrenceMode": "once",
+  "recurrenceDays": null,
+  "checklist": [],
+  "tags": ["#note", "#voice"],
   "items": [
     {
-      "type": "reminder",
-      "title": "Short actionable title",
-      "content": "Task description",
-      "dueDateLocal": "YYYY-MM-DDTHH:mm",
-      "recurrenceMode": "once" | "daily" | "custom",
-      "recurrenceDays": [1, 3] or null,
-      "tags": ["#reminder", "#task"]
+      "type": "note",
+      "title": "Short title",
+      "content": "Description",
+      "dueDateLocal": null,
+      "recurrenceMode": "once",
+      "recurrenceDays": null,
+      "checklist": [],
+      "tags": ["#note", "#voice"]
     }
   ]
-}`;
+}
+
+For a reminder, use type reminder.
+For a list, use type list.
+
+For a list, checklist must contain objects:
+
+[
+  {
+    "id": "1",
+    "text": "Milk",
+    "completed": false
+  }
+]
+
+For multiple reminders, items must contain every separate reminder.
+
+For a single item, items must contain exactly one item.
+`;
 
         const groqRes = await fetch(
           `${GROQ_API_URL}/chat/completions`,
@@ -700,13 +995,16 @@ Respond ONLY with valid JSON using this exact structure:
               model: GROQ_CHAT_MODEL,
               response_format: { type: "json_object" },
               messages: [
-                { role: "system", content: systemPrompt },
+                {
+                  role: "system",
+                  content: systemPrompt,
+                },
                 {
                   role: "user",
-                  content: `Please structure this input:\n"${rawText}"`,
+                  content: `Structure this user input:\n${rawText}`,
                 },
               ],
-              temperature: 0.2,
+              temperature: 0.1,
             }),
           }
         );
@@ -725,233 +1023,297 @@ Respond ONLY with valid JSON using this exact structure:
 
           usedGroqStructuring = true;
 
-          // ----------------------------------------------
-          // STEP 4: Process multiple items or single item
-          // ----------------------------------------------
-          let formattedItems: Array<{
-            type: "note" | "reminder" | "list";
-            title: string;
-            content: string;
-            dueDate?: number;
-            dueDateLocal?: string;
-            recurrenceMode?: "once" | "daily" | "custom";
-            recurrenceDays?: number[];
-            isDaily?: boolean;
-            checklist?: Array<{ id: string; text: string; completed: boolean }>;
-            tags: string[];
-          }> = [];
+          // STEP 4: Multiple reminder processing.
 
-          // Check if Groq returned multiple items
-          if (Array.isArray(parsed.items) && parsed.items.length > 1 && !explicitListIntent) {
-            for (const item of parsed.items) {
-              let itemDueDate: number | undefined = undefined;
-              if (item.dueDateLocal) {
-                try {
-                  itemDueDate = parseLocalDatetime(
-                    item.dueDateLocal,
-                    clientTimezoneOffset
-                  );
-                } catch {}
+          let formattedItems: FormattedItem[] = [];
+
+          if (reminderIntent) {
+            if (
+              Array.isArray(parsed.items) &&
+              parsed.items.length > 1
+            ) {
+              formattedItems = parsed.items.map(
+                (item: Record<string, unknown>) => {
+                  let dueDate: number | undefined;
+
+                  if (typeof item.dueDateLocal === "string") {
+                    try {
+                      dueDate = parseLocalDatetime(
+                        item.dueDateLocal,
+                        clientTimezoneOffset
+                      );
+                    } catch (error) {
+                      console.warn(
+                        "[AI] Invalid reminder date:",
+                        error
+                      );
+                    }
+                  }
+
+                  const recurrenceMode =
+                    (item.recurrenceMode === "daily" ||
+                      item.recurrenceMode === "custom"
+                      ? item.recurrenceMode
+                      : "once") as RecurrenceMode;
+
+                  const title =
+                    typeof item.title === "string" &&
+                      item.title.trim()
+                      ? item.title.trim()
+                      : cleanReminderTitle(
+                        String(item.content || "")
+                      );
+
+                  const content =
+                    typeof item.content === "string" &&
+                      item.content.trim()
+                      ? item.content.trim()
+                      : cleanReminderContent(title);
+
+                  return {
+                    type: "reminder",
+                    title,
+                    content,
+                    dueDate,
+                    dueDateLocal:
+                      typeof item.dueDateLocal === "string"
+                        ? item.dueDateLocal
+                        : undefined,
+                    recurrenceMode,
+                    recurrenceDays: Array.isArray(
+                      item.recurrenceDays
+                    )
+                      ? item.recurrenceDays.filter(
+                        (day: unknown) =>
+                          Number.isInteger(day) &&
+                          Number(day) >= 0 &&
+                          Number(day) <= 6
+                      )
+                      : undefined,
+                    isDaily: recurrenceMode === "daily",
+                    checklist: undefined,
+                    tags: ["#reminder", "#task"],
+                  };
+                }
+              );
+            }
+
+            // Rule-based multiple-reminder fallback.
+            if (formattedItems.length <= 1) {
+              const ruleItems = formatRuleBasedReminders(
+                rawText,
+                refDate,
+                clientTimezoneOffset
+              );
+
+              if (ruleItems.length > 1) {
+                formattedItems = ruleItems;
               }
-
-              const rMode = (item.recurrenceMode || "once") as "once" | "daily" | "custom";
-              const rTitle = (item.title?.trim() || cleanReminderTitle(item.content || "")).trim() || "Reminder";
-              const rContent = (item.content?.trim() || cleanReminderContent(item.title || "")).trim() || rTitle;
-
-              formattedItems.push({
-                type: "reminder",
-                title: rTitle,
-                content: rContent,
-                dueDate: itemDueDate,
-                dueDateLocal: item.dueDateLocal || undefined,
-                recurrenceMode: rMode,
-                recurrenceDays: item.recurrenceDays || undefined,
-                isDaily: rMode === "daily",
-                checklist: undefined,
-                tags: item.tags?.length ? item.tags : ["#reminder", rMode === "daily" ? "#daily" : "#task"],
-              });
             }
           }
 
-          // Rule-based multi-reminder fallback check if Groq missed multiple tasks
-          if (formattedItems.length <= 1 && !explicitListIntent) {
-            const ruleMulti = parseMultipleReminders(rawText, refDate, clientTimezoneOffset);
-            if (ruleMulti && ruleMulti.length > 1) {
-              formattedItems = ruleMulti.map((m) => {
-                const isDaily = m.recurrenceMode === "daily";
-                return {
-                  type: "reminder" as const,
-                  title: m.title || "Reminder",
-                  content: cleanReminderContent(m.title + (m.dueDateLocal ? ` scheduled for ${m.dueDateLocal}` : "")),
-                  dueDate: m.dueDate,
-                  dueDateLocal: m.dueDateLocal,
-                  recurrenceMode: m.recurrenceMode || "once",
-                  recurrenceDays: m.recurrenceDays,
-                  isDaily,
-                  checklist: undefined,
-                  tags: ["#reminder", isDaily ? "#daily" : "#task"],
-                };
-              });
-            }
-          }
+          // STEP 5: Final single-item classification.
 
-          let finalType: "note" | "reminder" | "list" = "note";
-          let finalDueDate: number | undefined = undefined;
-          let dueDateLocal: string | undefined = undefined;
-          let recurrenceMode: "once" | "daily" | "custom" = "once";
-          let recurrenceDays: number[] | undefined = undefined;
-          let finalTitle = "";
-          let finalContent = "";
-          let finalChecklist: Array<{ id: string; text: string; completed: boolean }> | undefined = undefined;
-          let finalTags: string[] = [];
+          if (formattedItems.length <= 1) {
+            let finalType: ItemType;
 
-          if (formattedItems.length > 1) {
-            finalType = "reminder";
-            finalTitle = formattedItems[0].title;
-            finalContent = cleanReminderContent(rawText);
-            finalDueDate = formattedItems[0].dueDate;
-            dueDateLocal = formattedItems[0].dueDateLocal;
-            recurrenceMode = formattedItems[0].recurrenceMode || "once";
-            recurrenceDays = formattedItems[0].recurrenceDays;
-            finalTags = ["#reminder"];
-          } else {
-            // Single item processing
-            if (natural.isReminder || natural.dueDate) {
+            if (reminderIntent) {
               finalType = "reminder";
-            } else if (explicitListIntent) {
+            } else if (
+              explicitListIntent ||
+              parsed.type === "list"
+            ) {
+              // Use explicit detection and AI classification.
               finalType = "list";
             } else {
               finalType = "note";
             }
 
+            let finalTitle =
+              typeof parsed.title === "string"
+                ? parsed.title.trim()
+                : "";
+
+            let finalContent =
+              typeof parsed.content === "string"
+                ? parsed.content.trim()
+                : "";
+
+            let finalDueDate: number | undefined;
+            let dueDateLocal: string | undefined;
+
+            let recurrenceMode: RecurrenceMode = "once";
+            let recurrenceDays: number[] | undefined;
+
+            let finalChecklist: ChecklistItem[] | undefined;
+
             if (finalType === "reminder") {
               dueDateLocal =
-                parsed.dueDateLocal ||
-                natural.dueDateLocal ||
-                undefined;
+                typeof parsed.dueDateLocal === "string" &&
+                  parsed.dueDateLocal.trim()
+                  ? parsed.dueDateLocal.trim()
+                  : natural.dueDateLocal;
 
-              if (parsed.dueDateLocal) {
+              if (dueDateLocal) {
                 try {
                   finalDueDate = parseLocalDatetime(
-                    parsed.dueDateLocal,
+                    dueDateLocal,
                     clientTimezoneOffset
                   );
-                } catch (dateError) {
+                } catch (error) {
                   console.warn(
-                    "[/api/ai/process] Groq date parsing error:",
-                    dateError
+                    "[AI] Groq date parsing error:",
+                    error
                   );
                 }
               }
 
-              // Use natural parser if Groq did not provide a valid date.
+              // Use the natural date parser when Groq fails.
               if (
-                (!finalDueDate || !Number.isFinite(finalDueDate)) &&
+                (finalDueDate === undefined ||
+                  !Number.isFinite(finalDueDate)) &&
                 natural.dueDate
               ) {
                 finalDueDate = natural.dueDate;
                 dueDateLocal = natural.dueDateLocal;
               }
 
+              const parsedRecurrence = parsed.recurrenceMode;
+
+              recurrenceMode =
+                parsedRecurrence === "daily" ||
+                  parsedRecurrence === "custom"
+                  ? parsedRecurrence
+                  : natural.recurrenceMode || "once";
+
+              recurrenceDays = Array.isArray(
+                parsed.recurrenceDays
+              )
+                ? parsed.recurrenceDays
+                : natural.recurrenceDays;
+            }
+
+            // Generate the correct title and content.
+            if (finalType === "reminder") {
               if (
-                finalDueDate !== undefined &&
-                !Number.isFinite(finalDueDate)
+                !finalTitle ||
+                finalTitle.split(/\s+/).length > 7
               ) {
-                finalDueDate = undefined;
+                finalTitle =
+                  natural.title || cleanReminderTitle(rawText);
               }
-            }
 
-            recurrenceMode =
-              finalType === "reminder"
-                ? parsed.recurrenceMode ||
-                  natural.recurrenceMode ||
-                  "once"
-                : "once";
-
-            recurrenceDays =
-              finalType === "reminder"
-                ? parsed.recurrenceDays ||
-                  natural.recurrenceDays
-                : undefined;
-
-            finalTitle = parsed.title?.trim() || "";
-            finalContent = parsed.content?.trim() || "";
-
-            if (
-              !finalTitle ||
-              finalTitle.toLowerCase() === finalContent.toLowerCase() ||
-              finalTitle.split(/\s+/).length > 6
-            ) {
-              if (finalType === "reminder") {
-                finalTitle = natural.title;
-                if (!finalContent || finalContent.toLowerCase() === finalTitle.toLowerCase()) {
-                  finalContent = cleanReminderContent(rawText);
-                }
-              } else if (finalType === "list") {
-                const listInfo = generateSmartListInfo(rawText);
-                finalTitle = listInfo.title;
-                if (!finalContent || finalContent.toLowerCase() === finalTitle.toLowerCase()) {
-                  finalContent = listInfo.content;
-                }
-              } else {
-                const noteInfo = generateSmartNoteInfo(rawText);
-                finalTitle = noteInfo.title;
-                if (!finalContent || finalContent.toLowerCase() === finalTitle.toLowerCase()) {
-                  finalContent = noteInfo.content;
-                }
-              }
-            }
-
-            if (!finalTitle) {
-              if (finalType === "reminder") {
-                finalTitle = natural.title;
-              } else if (finalType === "list") {
-                finalTitle = generateSmartListInfo(rawText).title;
-              } else {
-                finalTitle = generateSmartNoteInfo(rawText).title;
-              }
-            }
-
-            if (!finalContent) {
-              if (finalType === "reminder") {
+              if (!finalContent) {
                 finalContent = cleanReminderContent(rawText);
-              } else if (finalType === "list") {
-                finalContent = generateSmartListInfo(rawText).content;
-              } else {
-                finalContent = generateSmartNoteInfo(rawText).content;
               }
             }
 
             if (finalType === "list") {
               const listInfo = generateSmartListInfo(rawText);
-              finalChecklist =
-                Array.isArray(parsed.checklist) && parsed.checklist.length > 0
-                  ? parsed.checklist
-                  : listInfo.checklist;
+
+              // Deterministic extraction for "add ... to my ... list".
+              const extractedList =
+                extractItemsFromAddToList(rawText);
+
+              if (extractedList) {
+                finalTitle = extractedList.title;
+                finalContent =
+                  `Items to add to your ${extractedList.title} list.`;
+
+                finalChecklist = extractedList.items;
+              } else {
+                if (
+                  !finalTitle ||
+                  finalTitle.split(/\s+/).length > 7
+                ) {
+                  finalTitle = listInfo.title;
+                }
+
+                if (!finalContent) {
+                  finalContent = listInfo.content;
+                }
+
+                const aiChecklist = normalizeChecklist(
+                  parsed.checklist
+                );
+
+                const generatedChecklist = normalizeChecklist(
+                  listInfo.checklist
+                );
+
+                // Prefer the AI's individually extracted items.
+                // Use rule-based extraction when AI returns none.
+                finalChecklist =
+                  aiChecklist.length > 0
+                    ? aiChecklist
+                    : generatedChecklist;
+              }
+
+              if (!finalChecklist || finalChecklist.length === 0) {
+                console.warn(
+                  "[AI] List detected but no checklist items extracted:",
+                  rawText
+                );
+              }
             }
 
-            finalTags =
-              finalType === "list"
-                ? ["#list", "#shopping"]
-                : finalType === "reminder"
-                  ? ["#reminder", recurrenceMode === "daily" ? "#daily" : "#task"]
+            if (finalType === "note") {
+              const noteInfo = generateSmartNoteInfo(rawText);
+
+              if (
+                !finalTitle ||
+                finalTitle.split(/\s+/).length > 7
+              ) {
+                finalTitle = noteInfo.title;
+              }
+
+              if (!finalContent) {
+                finalContent = noteInfo.content;
+              }
+            }
+
+            if (!finalTitle) {
+              finalTitle = rawText.slice(0, 60).trim();
+            }
+
+            if (!finalContent) {
+              finalContent = rawText;
+            }
+
+            const finalTags =
+              finalType === "reminder"
+                ? [
+                  "#reminder",
+                  recurrenceMode === "daily"
+                    ? "#daily"
+                    : "#task",
+                ]
+                : finalType === "list"
+                  ? ["#list", "#voice"]
                   : ["#note", "#voice"];
 
-            formattedItems = [
-              {
-                type: finalType,
-                title: finalTitle,
-                content: finalContent,
-                dueDate: finalDueDate,
-                dueDateLocal: finalType === "reminder" ? dueDateLocal : undefined,
-                recurrenceMode,
-                recurrenceDays,
-                isDaily: recurrenceMode === "daily",
-                checklist: finalChecklist,
-                tags: finalTags,
-              },
-            ];
+            const singleItem: FormattedItem = {
+              type: finalType,
+              title: finalTitle,
+              content: finalContent,
+              dueDate: finalDueDate,
+              dueDateLocal:
+                finalType === "reminder"
+                  ? dueDateLocal
+                  : undefined,
+              recurrenceMode,
+              recurrenceDays,
+              isDaily: recurrenceMode === "daily",
+              checklist: finalChecklist,
+              tags: finalTags,
+            };
+
+            formattedItems = [singleItem];
           }
+
+          // STEP 6: Prepare response.
+
+          const primaryItem = formattedItems[0];
 
           return NextResponse.json({
             success: true,
@@ -959,39 +1321,51 @@ Respond ONLY with valid JSON using this exact structure:
             usedGroqTranscription,
             usedGroqStructuring,
             usedOpenAI: false,
+
             rawTranscript: rawText,
-            type: finalType,
-            title: finalTitle,
-            content: finalContent,
-            dueDate: finalDueDate,
-            dueDateLocal:
-              finalType === "reminder" ? dueDateLocal : undefined,
-            recurrenceMode,
-            recurrenceDays,
-            isDaily: recurrenceMode === "daily",
-            checklist: finalChecklist,
-            tags: finalTags,
+
+            type:
+              formattedItems.length > 1
+                ? "reminder"
+                : primaryItem.type,
+
+            title: primaryItem.title,
+
+            content:
+              formattedItems.length > 1
+                ? cleanReminderContent(rawText)
+                : primaryItem.content,
+
+            dueDate: primaryItem.dueDate,
+            dueDateLocal: primaryItem.dueDateLocal,
+            recurrenceMode: primaryItem.recurrenceMode,
+            recurrenceDays: primaryItem.recurrenceDays,
+            isDaily: primaryItem.isDaily,
+            checklist: primaryItem.checklist,
+
+            tags:
+              formattedItems.length > 1
+                ? ["#reminder"]
+                : primaryItem.tags,
+
             items: formattedItems,
           });
-        } else {
-          const errorData = await groqRes.json().catch(() => ({}));
-
-          console.warn("[/api/ai/process] Groq chat API error:", {
-            status: groqRes.status,
-            error: errorData,
-          });
         }
-      } catch (groqErr) {
-        console.warn(
-          "[/api/ai/process] Groq structuring error:",
-          groqErr
-        );
+
+        const errorData = await groqRes
+          .json()
+          .catch(() => ({}));
+
+        console.warn("[AI] Groq chat API error:", {
+          status: groqRes.status,
+          error: errorData,
+        });
+      } catch (error) {
+        console.error("[AI] Groq structuring error:", error);
       }
     }
 
-    // --------------------------------------------------
-    // STEP 8: Rule-based fallback if Groq is unavailable.
-    // --------------------------------------------------
+    // STEP 7: Rule-based fallback.
 
     const structured = parseTextRuleBased(
       rawText,
@@ -1015,7 +1389,7 @@ Respond ONLY with valid JSON using this exact structure:
         ? error.message
         : "Failed to process audio/text.";
 
-    console.error("[/api/ai/process] Unexpected error:", error);
+    console.error("[AI] Unexpected processing error:", error);
 
     return NextResponse.json(
       { error: message },
