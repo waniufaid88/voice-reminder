@@ -728,3 +728,74 @@ export function generateSmartNoteInfo(rawText: string): {
 
   return { title, content };
 }
+
+/**
+ * Detects and parses multiple separate reminders from a single sentence or text input.
+ * Supports natural connecting words like "then", "and then", "after that", "also", "and also",
+ * semicolons, newlines, and multi-time expressions.
+ *
+ * Example:
+ * "Call my friend at 11:05 AM then I have to go to the market at 1:00 PM then I have to go for a walk at 7:30 PM."
+ * Returns 3 separate parsed reminders with their distinct times and titles.
+ */
+export function parseMultipleReminders(
+  rawText: string,
+  referenceDate: Date = new Date(),
+  clientTimezoneOffset?: number
+): ParsedNaturalReminder[] | null {
+  const trimmed = rawText.trim();
+  if (!trimmed) return null;
+
+  // Split on natural task transition boundaries:
+  // - "then", "and then", "after that", "and after that"
+  // - "and also", "also" (when followed by a verb/action or "i have to/i need to")
+  // - Semicolons ";" or newlines "\n"
+  const splitPattern =
+    /(?:\s+(?:and\s+)?then\s+|\s+(?:and\s+)?after\s+that\s+|\s+and\s+also\s+|;\s*|\n+)/i;
+
+  let segments = trimmed.split(splitPattern).map((s) => s.trim()).filter(Boolean);
+
+  // If segments <= 1, check for clauses separated by ", and " or " and " when multiple times are mentioned
+  if (segments.length <= 1) {
+    const timeOccurrences = (
+      trimmed.match(/\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)|at\s+\d{1,2}(?::\d{2})?)\b/gi) || []
+    ).length;
+
+    if (timeOccurrences >= 2) {
+      // Split on ", and " or " and " followed by a task verb or subject
+      const andSplit = trimmed
+        .split(/,\s*(?:and\s+)?|\s+and\s+(?=[a-z\s]+(?:at\s+\d|\d{1,2}(?::\d{2})?\s*(?:am|pm)))/i)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      if (andSplit.length >= 2) {
+        segments = andSplit;
+      }
+    }
+  }
+
+  if (segments.length <= 1) {
+    return null;
+  }
+
+  const parsedReminders: ParsedNaturalReminder[] = [];
+
+  for (const seg of segments) {
+    const parsed = parseNaturalReminder(seg, referenceDate, clientTimezoneOffset);
+
+    // Each segment must qualify as a reminder or have a detectable scheduled time/day
+    if (parsed.isReminder || parsed.dueDate || parsed.detectedTime) {
+      parsedReminders.push({
+        ...parsed,
+        title: parsed.title || cleanReminderTitle(seg),
+      });
+    }
+  }
+
+  // Only return as multiple reminders if at least 2 distinct reminders were detected
+  if (parsedReminders.length >= 2) {
+    return parsedReminders;
+  }
+
+  return null;
+}

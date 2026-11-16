@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 
 export const generateUploadUrl = mutation({
   args: {},
@@ -80,7 +81,7 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    return await ctx.db.insert("items", {
+    const itemId = await ctx.db.insert("items", {
       userId: args.userId,
       type: args.type,
       title: args.title.trim() || "Untitled",
@@ -100,6 +101,26 @@ export const create = mutation({
       createdAt: now,
       updatedAt: now,
     });
+
+    if (
+      args.type === "reminder" &&
+      args.dueDate &&
+      args.dueDate > now &&
+      (args.reminderStatus ?? "pending") === "pending"
+    ) {
+      try {
+        const scheduledJobId = await ctx.scheduler.runAt(
+          args.dueDate,
+          internal.notifications.triggerScheduledReminder,
+          { itemId }
+        );
+        await ctx.db.patch(itemId, { scheduledJobId });
+      } catch (err) {
+        console.error("[items:create] Failed to schedule reminder job:", err);
+      }
+    }
+
+    return itemId;
   },
 });
 
@@ -147,6 +168,45 @@ export const update = mutation({
     if (fields.recurrenceMode !== undefined) updates.recurrenceMode = fields.recurrenceMode;
     if (fields.recurrenceDays !== undefined) updates.recurrenceDays = fields.recurrenceDays;
     if (fields.checklist !== undefined) updates.checklist = fields.checklist;
+
+    const finalType = fields.type ?? existing.type;
+    const finalStatus = fields.reminderStatus ?? existing.reminderStatus;
+    const finalDueDate = fields.dueDate !== undefined ? fields.dueDate : existing.dueDate;
+    const now = Date.now();
+
+    const dueDateChanged = fields.dueDate !== undefined && fields.dueDate !== existing.dueDate;
+    const statusChanged = fields.reminderStatus !== undefined && fields.reminderStatus !== existing.reminderStatus;
+    const typeChanged = fields.type !== undefined && fields.type !== existing.type;
+
+    if (dueDateChanged || statusChanged || typeChanged) {
+      if (existing.scheduledJobId) {
+        try {
+          await ctx.scheduler.cancel(existing.scheduledJobId);
+        } catch {
+          // Ignore if job already executed
+        }
+        updates.scheduledJobId = undefined;
+      }
+
+      if (
+        finalType === "reminder" &&
+        finalStatus === "pending" &&
+        finalDueDate &&
+        finalDueDate > now
+      ) {
+        try {
+          const scheduledJobId = await ctx.scheduler.runAt(
+            finalDueDate,
+            internal.notifications.triggerScheduledReminder,
+            { itemId }
+          );
+          updates.scheduledJobId = scheduledJobId;
+          updates.isNotified = false;
+        } catch (err) {
+          console.error("[items:update] Failed to schedule reminder job:", err);
+        }
+      }
+    }
 
     await ctx.db.patch(itemId, updates);
   },
@@ -226,19 +286,62 @@ export const toggleReminderStatus = mutation({
         }
       }
 
+      if (item.scheduledJobId) {
+        try {
+          await ctx.scheduler.cancel(item.scheduledJobId);
+        } catch {
+          // Ignore if already cancelled or executed
+        }
+      }
+
+      let scheduledJobId: any = undefined;
+      try {
+        scheduledJobId = await ctx.scheduler.runAt(
+          nextDueDate,
+          internal.notifications.triggerScheduledReminder,
+          { itemId: args.itemId }
+        );
+      } catch (err) {
+        console.error(
+          "[items:toggleReminderStatus] Failed to reschedule recurring reminder:",
+          err
+        );
+      }
+
       await ctx.db.patch(args.itemId, {
         dueDate: nextDueDate,
         reminderStatus: "pending",
         isNotified: false,
+        scheduledJobId,
         updatedAt: Date.now(),
       });
       return { isRecurringAdvanced: true, nextDue: nextDueDate };
     }
 
     const newStatus = item.reminderStatus === "completed" ? "pending" : "completed";
+    if (item.scheduledJobId) {
+      try {
+        await ctx.scheduler.cancel(item.scheduledJobId);
+      } catch {}
+    }
+
+    let scheduledJobId: any = undefined;
+    if (newStatus === "pending" && item.dueDate && item.dueDate > Date.now()) {
+      try {
+        scheduledJobId = await ctx.scheduler.runAt(
+          item.dueDate,
+          internal.notifications.triggerScheduledReminder,
+          { itemId: args.itemId }
+        );
+      } catch (err) {
+        console.error("[items:toggleReminderStatus] Failed to reschedule:", err);
+      }
+    }
+
     await ctx.db.patch(args.itemId, {
       reminderStatus: newStatus,
       isNotified: newStatus === "completed",
+      scheduledJobId,
       updatedAt: Date.now(),
     });
     return { isRecurringAdvanced: false, status: newStatus };
@@ -250,11 +353,19 @@ export const stopDailyRepeat = mutation({
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
     if (!item) throw new Error("Item not found");
+
+    if (item.scheduledJobId) {
+      try {
+        await ctx.scheduler.cancel(item.scheduledJobId);
+      } catch {}
+    }
+
     await ctx.db.patch(args.itemId, {
       isDaily: false,
       recurrenceMode: "once",
       reminderStatus: "completed",
       isNotified: true,
+      scheduledJobId: undefined,
       updatedAt: Date.now(),
     });
   },
@@ -272,10 +383,28 @@ export const snoozeReminder = mutation({
     const baseTime = Math.max(item.dueDate ?? Date.now(), Date.now());
     const newDueDate = baseTime + args.minutes * 60 * 1000;
 
+    if (item.scheduledJobId) {
+      try {
+        await ctx.scheduler.cancel(item.scheduledJobId);
+      } catch {}
+    }
+
+    let scheduledJobId: any = undefined;
+    try {
+      scheduledJobId = await ctx.scheduler.runAt(
+        newDueDate,
+        internal.notifications.triggerScheduledReminder,
+        { itemId: args.itemId }
+      );
+    } catch (err) {
+      console.error("[items:snoozeReminder] Failed to schedule snoozed reminder:", err);
+    }
+
     await ctx.db.patch(args.itemId, {
       dueDate: newDueDate,
       reminderStatus: "pending",
       isNotified: false,
+      scheduledJobId,
       updatedAt: Date.now(),
     });
   },
@@ -292,11 +421,18 @@ export const deleteItem = mutation({
   args: { itemId: v.id("items") },
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
-    if (item && item.audioStorageId) {
-      try {
-        await ctx.storage.delete(item.audioStorageId);
-      } catch {
-        // Storage file deletion fallback
+    if (item) {
+      if (item.scheduledJobId) {
+        try {
+          await ctx.scheduler.cancel(item.scheduledJobId);
+        } catch {}
+      }
+      if (item.audioStorageId) {
+        try {
+          await ctx.storage.delete(item.audioStorageId);
+        } catch {
+          // Storage file deletion fallback
+        }
       }
     }
     await ctx.db.delete(args.itemId);

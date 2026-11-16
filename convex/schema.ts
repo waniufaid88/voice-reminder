@@ -42,6 +42,8 @@ export default defineSchema({
       v.union(v.literal("once"), v.literal("daily"), v.literal("custom"))
     ),
     recurrenceDays: v.optional(v.array(v.number())),
+    scheduledJobId: v.optional(v.id("_scheduled_functions")),
+    lastAlertedAt: v.optional(v.number()),
 
     // List specific fields
     checklist: v.optional(
@@ -64,5 +66,17 @@ export default defineSchema({
       searchField: "content",
       filterFields: ["userId", "type"],
     }),
+
+  pushSubscriptions: defineTable({
+    userId: v.id("users"),
+    endpoint: v.string(),
+    p256dh: v.string(),
+    auth: v.string(),
+    userAgent: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_endpoint", ["endpoint"]),
 });
 

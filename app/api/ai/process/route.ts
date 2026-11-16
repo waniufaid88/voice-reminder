@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   parseNaturalReminder,
+  parseMultipleReminders,
+  cleanReminderTitle,
   cleanReminderContent,
   generateSmartListInfo,
   generateSmartNoteInfo,
@@ -119,6 +121,64 @@ function parseTextRuleBased(
   refDate: Date = new Date(),
   clientTimezoneOffset?: number
 ) {
+  // Explicit checklist or shopping intent is never split into multiple reminders
+  if (hasExplicitListIntent(rawText)) {
+    const listInfo = generateSmartListInfo(rawText);
+    const listItem = {
+      type: "list" as const,
+      title: listInfo.title,
+      content: listInfo.content,
+      dueDate: undefined,
+      dueDateLocal: undefined,
+      recurrenceMode: "once" as const,
+      recurrenceDays: undefined,
+      isDaily: false,
+      checklist: listInfo.checklist,
+      tags: ["#list", "#shopping"],
+    };
+    return {
+      ...listItem,
+      items: [listItem],
+    };
+  }
+
+  // Check for multiple distinct reminders (e.g. joined by "then", "and then", "after that", etc.)
+  const multi = parseMultipleReminders(rawText, refDate, clientTimezoneOffset);
+  if (multi && multi.length > 1) {
+    const formattedItems = multi.map((m) => {
+      const isDaily = m.recurrenceMode === "daily";
+      return {
+        type: "reminder" as const,
+        title: m.title || "Reminder",
+        content: cleanReminderContent(
+          m.title + (m.dueDateLocal ? ` scheduled for ${m.dueDateLocal}` : "")
+        ),
+        dueDate: m.dueDate,
+        dueDateLocal: m.dueDateLocal,
+        recurrenceMode: m.recurrenceMode || "once",
+        recurrenceDays: m.recurrenceDays,
+        isDaily,
+        checklist: undefined,
+        tags: ["#reminder", isDaily ? "#daily" : "#task"],
+      };
+    });
+
+    return {
+      type: "reminder" as const,
+      title: formattedItems[0].title,
+      content: cleanReminderContent(rawText),
+      dueDate: formattedItems[0].dueDate,
+      dueDateLocal: formattedItems[0].dueDateLocal,
+      recurrenceMode: formattedItems[0].recurrenceMode,
+      recurrenceDays: formattedItems[0].recurrenceDays,
+      isDaily: formattedItems[0].isDaily,
+      checklist: undefined,
+      tags: ["#reminder"],
+      items: formattedItems,
+    };
+  }
+
+  // Single reminder check
   const natural = parseNaturalReminder(
     rawText,
     refDate,
@@ -126,7 +186,7 @@ function parseTextRuleBased(
   );
 
   if (natural.isReminder || natural.dueDate) {
-    return {
+    const reminderItem = {
       type: "reminder" as const,
       title: natural.title,
       content: cleanReminderContent(rawText),
@@ -141,28 +201,14 @@ function parseTextRuleBased(
         natural.recurrenceMode === "daily" ? "#daily" : "#task",
       ],
     };
-  }
-
-  if (hasExplicitListIntent(rawText)) {
-    const listInfo = generateSmartListInfo(rawText);
-
     return {
-      type: "list" as const,
-      title: listInfo.title,
-      content: listInfo.content,
-      dueDate: undefined,
-      dueDateLocal: undefined,
-      recurrenceMode: "once" as const,
-      recurrenceDays: undefined,
-      isDaily: false,
-      checklist: listInfo.checklist,
-      tags: ["#list", "#shopping"],
+      ...reminderItem,
+      items: [reminderItem],
     };
   }
 
   const noteInfo = generateSmartNoteInfo(rawText);
-
-  return {
+  const noteItem = {
     type: "note" as const,
     title: noteInfo.title,
     content: noteInfo.content,
@@ -173,6 +219,11 @@ function parseTextRuleBased(
     isDaily: false,
     checklist: undefined,
     tags: ["#note", "#voice"],
+  };
+
+  return {
+    ...noteItem,
+    items: [noteItem],
   };
 }
 
@@ -589,6 +640,29 @@ RECURRENCE RULES:
 - Day numbers are [0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat].
 - Otherwise "recurrenceMode": "once".
 
+MULTIPLE REMINDERS DETECTION:
+- If the user mentions MULTIPLE distinct reminder tasks (e.g. joined by "then", "and then", "after that", "also", or multiple scheduled actions with their own dates/times):
+  Example: "Call my friend at 11:05 AM then I have to go to the market at 1:00 PM then I have to go for a walk at 7:30 PM."
+  -> This contains 3 distinct reminder tasks:
+     1. "Call my friend" at 11:05 AM
+     2. "Go to the market" at 1:00 PM
+     3. "Go for a walk" at 7:30 PM
+- You MUST detect EVERY separate reminder task and return each one inside the "items" array!
+- If the user mentions 2, 3, 5, or more reminders in one input, extract ALL of them into the "items" array.
+- For each reminder in "items":
+  - "type": "reminder"
+  - "title": Clean, short actionable title (e.g. "Call my friend", "Go to the market", "Go for a walk")
+  - "content": Clear description of that specific task (e.g. "Call my friend at 11:05 AM")
+  - "dueDateLocal": "YYYY-MM-DDTHH:mm" in user's local time
+  - "recurrenceMode": "once" | "daily" | "custom"
+  - "recurrenceDays": null or [days]
+  - "tags": ["#reminder", "#task"]
+- CRITICAL: Do NOT split notes or shopping checklists into multiple reminders!
+  - "Buy milk, eggs, bread and cheese" -> This is a SINGLE "list" item, NOT multiple reminders!
+  - "I learned Next.js and TypeScript today and practiced closures" -> This is a SINGLE "note", NOT reminders!
+  - Only create multiple reminder items when there are multiple distinct scheduled reminder tasks or time expressions.
+- If the input is a single reminder, single note, or single checklist, "items" should contain that 1 item.
+
 Respond ONLY with valid JSON using this exact structure:
 {
   "type": "note" | "reminder" | "list",
@@ -600,7 +674,18 @@ Respond ONLY with valid JSON using this exact structure:
   "checklist": [
     { "id": "1", "text": "item description", "completed": false }
   ],
-  "tags": ["#tag1", "#tag2"]
+  "tags": ["#tag1", "#tag2"],
+  "items": [
+    {
+      "type": "reminder",
+      "title": "Short actionable title",
+      "content": "Task description",
+      "dueDateLocal": "YYYY-MM-DDTHH:mm",
+      "recurrenceMode": "once" | "daily" | "custom",
+      "recurrenceDays": [1, 3] or null,
+      "tags": ["#reminder", "#task"]
+    }
+  ]
 }`;
 
         const groqRes = await fetch(
@@ -641,178 +726,238 @@ Respond ONLY with valid JSON using this exact structure:
           usedGroqStructuring = true;
 
           // ----------------------------------------------
-          // STEP 4: Determine the final category.
+          // STEP 4: Process multiple items or single item
           // ----------------------------------------------
+          let formattedItems: Array<{
+            type: "note" | "reminder" | "list";
+            title: string;
+            content: string;
+            dueDate?: number;
+            dueDateLocal?: string;
+            recurrenceMode?: "once" | "daily" | "custom";
+            recurrenceDays?: number[];
+            isDaily?: boolean;
+            checklist?: Array<{ id: string; text: string; completed: boolean }>;
+            tags: string[];
+          }> = [];
+
+          // Check if Groq returned multiple items
+          if (Array.isArray(parsed.items) && parsed.items.length > 1 && !explicitListIntent) {
+            for (const item of parsed.items) {
+              let itemDueDate: number | undefined = undefined;
+              if (item.dueDateLocal) {
+                try {
+                  itemDueDate = parseLocalDatetime(
+                    item.dueDateLocal,
+                    clientTimezoneOffset
+                  );
+                } catch {}
+              }
+
+              const rMode = (item.recurrenceMode || "once") as "once" | "daily" | "custom";
+              const rTitle = (item.title?.trim() || cleanReminderTitle(item.content || "")).trim() || "Reminder";
+              const rContent = (item.content?.trim() || cleanReminderContent(item.title || "")).trim() || rTitle;
+
+              formattedItems.push({
+                type: "reminder",
+                title: rTitle,
+                content: rContent,
+                dueDate: itemDueDate,
+                dueDateLocal: item.dueDateLocal || undefined,
+                recurrenceMode: rMode,
+                recurrenceDays: item.recurrenceDays || undefined,
+                isDaily: rMode === "daily",
+                checklist: undefined,
+                tags: item.tags?.length ? item.tags : ["#reminder", rMode === "daily" ? "#daily" : "#task"],
+              });
+            }
+          }
+
+          // Rule-based multi-reminder fallback check if Groq missed multiple tasks
+          if (formattedItems.length <= 1 && !explicitListIntent) {
+            const ruleMulti = parseMultipleReminders(rawText, refDate, clientTimezoneOffset);
+            if (ruleMulti && ruleMulti.length > 1) {
+              formattedItems = ruleMulti.map((m) => {
+                const isDaily = m.recurrenceMode === "daily";
+                return {
+                  type: "reminder" as const,
+                  title: m.title || "Reminder",
+                  content: cleanReminderContent(m.title + (m.dueDateLocal ? ` scheduled for ${m.dueDateLocal}` : "")),
+                  dueDate: m.dueDate,
+                  dueDateLocal: m.dueDateLocal,
+                  recurrenceMode: m.recurrenceMode || "once",
+                  recurrenceDays: m.recurrenceDays,
+                  isDaily,
+                  checklist: undefined,
+                  tags: ["#reminder", isDaily ? "#daily" : "#task"],
+                };
+              });
+            }
+          }
 
           let finalType: "note" | "reminder" | "list" = "note";
-
-          if (natural.isReminder || natural.dueDate) {
-            finalType = "reminder";
-          } else if (explicitListIntent) {
-            finalType = "list";
-          } else {
-            finalType = "note";
-          }
-
-          // ----------------------------------------------
-          // STEP 5: Handle reminder dates.
-          // ----------------------------------------------
-
           let finalDueDate: number | undefined = undefined;
           let dueDateLocal: string | undefined = undefined;
+          let recurrenceMode: "once" | "daily" | "custom" = "once";
+          let recurrenceDays: number[] | undefined = undefined;
+          let finalTitle = "";
+          let finalContent = "";
+          let finalChecklist: Array<{ id: string; text: string; completed: boolean }> | undefined = undefined;
+          let finalTags: string[] = [];
 
-          if (finalType === "reminder") {
-            dueDateLocal =
-              parsed.dueDateLocal ||
-              natural.dueDateLocal ||
-              undefined;
+          if (formattedItems.length > 1) {
+            finalType = "reminder";
+            finalTitle = formattedItems[0].title;
+            finalContent = cleanReminderContent(rawText);
+            finalDueDate = formattedItems[0].dueDate;
+            dueDateLocal = formattedItems[0].dueDateLocal;
+            recurrenceMode = formattedItems[0].recurrenceMode || "once";
+            recurrenceDays = formattedItems[0].recurrenceDays;
+            finalTags = ["#reminder"];
+          } else {
+            // Single item processing
+            if (natural.isReminder || natural.dueDate) {
+              finalType = "reminder";
+            } else if (explicitListIntent) {
+              finalType = "list";
+            } else {
+              finalType = "note";
+            }
 
-            if (parsed.dueDateLocal) {
-              try {
-                finalDueDate = parseLocalDatetime(
-                  parsed.dueDateLocal,
-                  clientTimezoneOffset
-                );
-              } catch (dateError) {
-                console.warn(
-                  "[/api/ai/process] Groq date parsing error:",
-                  dateError
-                );
+            if (finalType === "reminder") {
+              dueDateLocal =
+                parsed.dueDateLocal ||
+                natural.dueDateLocal ||
+                undefined;
+
+              if (parsed.dueDateLocal) {
+                try {
+                  finalDueDate = parseLocalDatetime(
+                    parsed.dueDateLocal,
+                    clientTimezoneOffset
+                  );
+                } catch (dateError) {
+                  console.warn(
+                    "[/api/ai/process] Groq date parsing error:",
+                    dateError
+                  );
+                }
+              }
+
+              // Use natural parser if Groq did not provide a valid date.
+              if (
+                (!finalDueDate || !Number.isFinite(finalDueDate)) &&
+                natural.dueDate
+              ) {
+                finalDueDate = natural.dueDate;
+                dueDateLocal = natural.dueDateLocal;
+              }
+
+              if (
+                finalDueDate !== undefined &&
+                !Number.isFinite(finalDueDate)
+              ) {
+                finalDueDate = undefined;
               }
             }
 
-            // Use natural parser if Groq did not provide a valid date.
-            if (
-              (!finalDueDate || !Number.isFinite(finalDueDate)) &&
-              natural.dueDate
-            ) {
-              finalDueDate = natural.dueDate;
-              dueDateLocal = natural.dueDateLocal;
-            }
+            recurrenceMode =
+              finalType === "reminder"
+                ? parsed.recurrenceMode ||
+                  natural.recurrenceMode ||
+                  "once"
+                : "once";
+
+            recurrenceDays =
+              finalType === "reminder"
+                ? parsed.recurrenceDays ||
+                  natural.recurrenceDays
+                : undefined;
+
+            finalTitle = parsed.title?.trim() || "";
+            finalContent = parsed.content?.trim() || "";
 
             if (
-              finalDueDate !== undefined &&
-              !Number.isFinite(finalDueDate)
+              !finalTitle ||
+              finalTitle.toLowerCase() === finalContent.toLowerCase() ||
+              finalTitle.split(/\s+/).length > 6
             ) {
-              finalDueDate = undefined;
+              if (finalType === "reminder") {
+                finalTitle = natural.title;
+                if (!finalContent || finalContent.toLowerCase() === finalTitle.toLowerCase()) {
+                  finalContent = cleanReminderContent(rawText);
+                }
+              } else if (finalType === "list") {
+                const listInfo = generateSmartListInfo(rawText);
+                finalTitle = listInfo.title;
+                if (!finalContent || finalContent.toLowerCase() === finalTitle.toLowerCase()) {
+                  finalContent = listInfo.content;
+                }
+              } else {
+                const noteInfo = generateSmartNoteInfo(rawText);
+                finalTitle = noteInfo.title;
+                if (!finalContent || finalContent.toLowerCase() === finalTitle.toLowerCase()) {
+                  finalContent = noteInfo.content;
+                }
+              }
             }
-          }
 
-          const recurrenceMode =
-            finalType === "reminder"
-              ? parsed.recurrenceMode ||
-              natural.recurrenceMode ||
-              "once"
-              : "once";
+            if (!finalTitle) {
+              if (finalType === "reminder") {
+                finalTitle = natural.title;
+              } else if (finalType === "list") {
+                finalTitle = generateSmartListInfo(rawText).title;
+              } else {
+                finalTitle = generateSmartNoteInfo(rawText).title;
+              }
+            }
 
-          const recurrenceDays =
-            finalType === "reminder"
-              ? parsed.recurrenceDays ||
-              natural.recurrenceDays
-              : undefined;
-
-          // ----------------------------------------------
-          // STEP 6: Prepare title and content.
-          // ----------------------------------------------
-
-          let finalTitle = parsed.title?.trim() || "";
-          let finalContent = parsed.content?.trim() || "";
-
-          if (
-            !finalTitle ||
-            finalTitle.toLowerCase() === finalContent.toLowerCase() ||
-            finalTitle.split(/\s+/).length > 6
-          ) {
-            if (finalType === "reminder") {
-              finalTitle = natural.title;
-
-              if (
-                !finalContent ||
-                finalContent.toLowerCase() ===
-                finalTitle.toLowerCase()
-              ) {
+            if (!finalContent) {
+              if (finalType === "reminder") {
                 finalContent = cleanReminderContent(rawText);
+              } else if (finalType === "list") {
+                finalContent = generateSmartListInfo(rawText).content;
+              } else {
+                finalContent = generateSmartNoteInfo(rawText).content;
               }
-            } else if (finalType === "list") {
+            }
+
+            if (finalType === "list") {
               const listInfo = generateSmartListInfo(rawText);
-
-              finalTitle = listInfo.title;
-
-              if (
-                !finalContent ||
-                finalContent.toLowerCase() ===
-                finalTitle.toLowerCase()
-              ) {
-                finalContent = listInfo.content;
-              }
-            } else {
-              const noteInfo = generateSmartNoteInfo(rawText);
-
-              finalTitle = noteInfo.title;
-
-              if (
-                !finalContent ||
-                finalContent.toLowerCase() ===
-                finalTitle.toLowerCase()
-              ) {
-                finalContent = noteInfo.content;
-              }
+              finalChecklist =
+                Array.isArray(parsed.checklist) && parsed.checklist.length > 0
+                  ? parsed.checklist
+                  : listInfo.checklist;
             }
+
+            finalTags =
+              finalType === "list"
+                ? ["#list", "#shopping"]
+                : finalType === "reminder"
+                  ? ["#reminder", recurrenceMode === "daily" ? "#daily" : "#task"]
+                  : ["#note", "#voice"];
+
+            formattedItems = [
+              {
+                type: finalType,
+                title: finalTitle,
+                content: finalContent,
+                dueDate: finalDueDate,
+                dueDateLocal: finalType === "reminder" ? dueDateLocal : undefined,
+                recurrenceMode,
+                recurrenceDays,
+                isDaily: recurrenceMode === "daily",
+                checklist: finalChecklist,
+                tags: finalTags,
+              },
+            ];
           }
-
-          if (!finalTitle) {
-            if (finalType === "reminder") {
-              finalTitle = natural.title;
-            } else if (finalType === "list") {
-              finalTitle = generateSmartListInfo(rawText).title;
-            } else {
-              finalTitle = generateSmartNoteInfo(rawText).title;
-            }
-          }
-
-          if (!finalContent) {
-            if (finalType === "reminder") {
-              finalContent = cleanReminderContent(rawText);
-            } else if (finalType === "list") {
-              finalContent = generateSmartListInfo(rawText).content;
-            } else {
-              finalContent = generateSmartNoteInfo(rawText).content;
-            }
-          }
-
-          // ----------------------------------------------
-          // STEP 7: Prepare checklist and tags.
-          // ----------------------------------------------
-
-          let finalChecklist = undefined;
-
-          if (finalType === "list") {
-            const listInfo = generateSmartListInfo(rawText);
-
-            finalChecklist =
-              Array.isArray(parsed.checklist) &&
-                parsed.checklist.length > 0
-                ? parsed.checklist
-                : listInfo.checklist;
-          }
-
-          const finalTags =
-            finalType === "list"
-              ? ["#list", "#shopping"]
-              : finalType === "reminder"
-                ? [
-                  "#reminder",
-                  recurrenceMode === "daily" ? "#daily" : "#task",
-                ]
-                : ["#note", "#voice"];
 
           return NextResponse.json({
             success: true,
             usedGroq: true,
             usedGroqTranscription,
             usedGroqStructuring,
-            // Retain this field for compatibility with clients
-            // that may still read the old property.
             usedOpenAI: false,
             rawTranscript: rawText,
             type: finalType,
@@ -826,6 +971,7 @@ Respond ONLY with valid JSON using this exact structure:
             isDaily: recurrenceMode === "daily",
             checklist: finalChecklist,
             tags: finalTags,
+            items: formattedItems,
           });
         } else {
           const errorData = await groqRes.json().catch(() => ({}));

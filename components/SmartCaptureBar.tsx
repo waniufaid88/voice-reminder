@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 
 import {
   parseNaturalReminder,
+  parseMultipleReminders,
   cleanReminderContent,
   generateSmartListInfo,
   generateSmartNoteInfo,
@@ -29,7 +30,7 @@ const captureSchema = z.object({
 type CaptureFormValues = z.infer<typeof captureSchema>;
 
 interface SmartCaptureBarProps {
-  onSaveItem: (data: StructuredItemData) => Promise<void>;
+  onSaveItem: (data: StructuredItemData | StructuredItemData[]) => Promise<void>;
 }
 
 /**
@@ -125,6 +126,46 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
   ): StructuredItemData => {
     const offset = new Date().getTimezoneOffset();
 
+    // Check for multiple distinct reminders first unless explicit list intent
+    if (!isExplicitListRequest(text)) {
+      const multi = parseMultipleReminders(text, new Date(), offset);
+      if (multi && multi.length > 1) {
+        const items: StructuredItemData[] = multi.map((m) => {
+          const isDaily = m.recurrenceMode === "daily";
+          return {
+            type: "reminder",
+            title: m.title || "Reminder",
+            content: cleanReminderContent(
+              m.title + (m.dueDateLocal ? ` scheduled for ${m.dueDateLocal}` : "")
+            ),
+            dueDate: m.dueDate,
+            dueDateLocal: m.dueDateLocal,
+            recurrenceMode: m.recurrenceMode || "once",
+            recurrenceDays: m.recurrenceDays,
+            isDaily,
+            ...(audioData || {}),
+            tags: audioData
+              ? ["#reminder", "#voice"]
+              : ["#reminder", isDaily ? "#daily" : "#task"],
+          };
+        });
+
+        return {
+          type: "reminder",
+          title: items[0].title,
+          content: cleanReminderContent(text),
+          dueDate: items[0].dueDate,
+          dueDateLocal: items[0].dueDateLocal,
+          recurrenceMode: items[0].recurrenceMode,
+          recurrenceDays: items[0].recurrenceDays,
+          isDaily: items[0].isDaily,
+          ...(audioData || {}),
+          tags: audioData ? ["#reminder", "#voice"] : ["#reminder"],
+          items,
+        };
+      }
+    }
+
     const natural = parseNaturalReminder(
       text,
       new Date(),
@@ -185,6 +226,7 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
 
   /**
    * Corrects an API response when it misses clear shopping intent.
+   * Preserves multiple reminders if returned by API.
    *
    * We do not override an API Reminder.
    */
@@ -197,6 +239,19 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       audioPreviewUrl?: string;
     }
   ): StructuredItemData => {
+    // If multiple reminders were parsed, keep them and attach audio
+    if (data.items && data.items.length > 1) {
+      const itemsWithAudio = data.items.map((it) => ({
+        ...it,
+        ...(audioData || {}),
+      }));
+      return {
+        ...data,
+        ...(audioData || {}),
+        items: itemsWithAudio,
+      };
+    }
+
     if (
       data.type === "reminder" ||
       data.type === "list" ||
@@ -423,6 +478,15 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
           audioDuration: result.duration,
           audioPreviewUrl: result.url,
         };
+
+        if (data.items && data.items.length > 1) {
+          finalPreview.items = data.items.map((it: StructuredItemData) => ({
+            ...it,
+            audioBlob: sanitizedBlob,
+            audioDuration: result.duration,
+            audioPreviewUrl: result.url,
+          }));
+        }
 
         if (text) {
           finalPreview = correctApiClassification(

@@ -138,20 +138,30 @@ export default function DashboardPage() {
     return items.filter((i) => i.isPinned === isPinned);
   }
 
-  // Save new item handler (with audio upload if recorded)
-  const handleSaveItem = async (data: StructuredItemData) => {
+  // Save new item handler (supports single item or multiple reminders batch)
+  const handleSaveItem = async (data: StructuredItemData | StructuredItemData[]) => {
     if (!user) return;
+
+    const itemsToSave: StructuredItemData[] = Array.isArray(data)
+      ? data
+      : data.items && data.items.length > 1
+        ? data.items
+        : [data];
 
     let audioStorageId: Id<"_storage"> | undefined;
 
-    // Upload audio blob to Convex Storage if present
-    if (data.audioBlob) {
+    // Upload audio blob to Convex Storage once if present
+    const firstAudioBlob =
+      (Array.isArray(data) ? data[0]?.audioBlob : data.audioBlob) ||
+      itemsToSave[0]?.audioBlob;
+
+    if (firstAudioBlob) {
       try {
         const postUrl = await generateUploadUrl();
         const result = await fetch(postUrl, {
           method: "POST",
-          headers: { "Content-Type": data.audioBlob.type },
-          body: data.audioBlob,
+          headers: { "Content-Type": firstAudioBlob.type },
+          body: firstAudioBlob,
         });
         const json = await result.json();
         audioStorageId = json.storageId as Id<"_storage">;
@@ -160,20 +170,32 @@ export default function DashboardPage() {
       }
     }
 
-    await createItem({
-      userId: user._id as Id<"users">,
-      type: data.type,
-      title: data.title,
-      content: data.content,
-      dueDate: data.dueDate ?? undefined,
-      isDaily: data.isDaily,
-      recurrenceMode: data.recurrenceMode,
-      recurrenceDays: data.recurrenceDays,
-      checklist: data.checklist,
-      tags: data.tags || [],
-      audioStorageId,
-      audioDuration: data.audioDuration,
-    });
+    // Save each item individually into Convex
+    for (const item of itemsToSave) {
+      await createItem({
+        userId: user._id as Id<"users">,
+        type: item.type,
+        title: item.title,
+        content: item.content,
+        dueDate: item.dueDate ?? undefined,
+        isDaily: item.isDaily,
+        recurrenceMode: item.recurrenceMode,
+        recurrenceDays: item.recurrenceDays,
+        checklist: item.checklist,
+        tags: item.tags || [],
+        audioStorageId,
+        audioDuration: item.audioDuration,
+      });
+    }
+
+    if (itemsToSave.length > 1) {
+      toast.success(`Created ${itemsToSave.length} reminders! ⏰`);
+    } else {
+      const type = itemsToSave[0]?.type || "item";
+      toast.success(
+        `Saved as ${type.charAt(0).toUpperCase() + type.slice(1)}!`
+      );
+    }
   };
 
   const handleLogout = async () => {
