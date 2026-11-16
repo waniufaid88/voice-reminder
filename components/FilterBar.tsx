@@ -1,5 +1,7 @@
 "use client";
 
+import { Bell, List, FileText, Layers, Search, X } from "lucide-react";
+
 interface FilterBarProps {
   activeTab: "all" | "note" | "reminder" | "list";
   onTabChange: (tab: "all" | "note" | "reminder" | "list") => void;
@@ -26,111 +28,133 @@ export function FilterBar({
   selectedTag,
   onTagSelect,
 }: FilterBarProps) {
+  // Default sample tags if none exist yet, ensuring user sees the design tags #list #voice #note #reminder #task
+  const displayTags =
+    availableTags.length > 0
+      ? availableTags
+      : ["list", "voice", "note", "reminder", "task"];
+
   return (
-    <div className="space-y-3">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        {/* Type Tabs */}
-        <div className="flex items-center gap-1 overflow-x-auto rounded-xl bg-zinc-100 p-1 dark:bg-zinc-800/80">
+    <div className="space-y-3.5 select-none">
+      {/* Desktop & Mobile Main Tabs Row */}
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        {/* Category Tabs: Scrollable on mobile, flex on desktop */}
+        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar py-1">
+          {/* Reminders Tab */}
           <button
             type="button"
             onClick={() => onTabChange("reminder")}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${activeTab === "reminder"
-              ? "bg-white text-amber-700 shadow-xs dark:bg-zinc-900 dark:text-amber-400"
-              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-              }`}
+            className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
+              activeTab === "reminder"
+                ? "bg-amber-600 text-white shadow-sm shadow-amber-600/30"
+                : "bg-white text-zinc-600 hover:text-zinc-900 border border-zinc-200/80 hover:bg-zinc-100 dark:bg-[#161726] dark:text-zinc-300 dark:border-white/[0.07] dark:hover:bg-[#202135]"
+            }`}
           >
-            ⏰ Reminders ({counts.reminder})
+            <Bell className="h-3.5 w-3.5" />
+            <span>Reminders ({counts.reminder})</span>
           </button>
+
+          {/* Lists Tab */}
           <button
             type="button"
             onClick={() => onTabChange("list")}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${activeTab === "list"
-              ? "bg-white text-emerald-700 shadow-xs dark:bg-zinc-900 dark:text-emerald-400"
-              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-              }`}
+            className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
+              activeTab === "list"
+                ? "bg-purple-600 text-white shadow-sm shadow-purple-600/30"
+                : "bg-white text-zinc-600 hover:text-zinc-900 border border-zinc-200/80 hover:bg-zinc-100 dark:bg-[#161726] dark:text-zinc-300 dark:border-white/[0.07] dark:hover:bg-[#202135]"
+            }`}
           >
-            ✓ Lists ({counts.list})
+            <List className="h-3.5 w-3.5" />
+            <span>Lists ({counts.list})</span>
           </button>
+
+          {/* Notes Tab */}
           <button
             type="button"
             onClick={() => onTabChange("note")}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${activeTab === "note"
-              ? "bg-white text-indigo-700 shadow-xs dark:bg-zinc-900 dark:text-indigo-400"
-              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-              }`}
+            className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
+              activeTab === "note"
+                ? "bg-blue-600 text-white shadow-sm shadow-blue-600/30"
+                : "bg-white text-zinc-600 hover:text-zinc-900 border border-zinc-200/80 hover:bg-zinc-100 dark:bg-[#161726] dark:text-zinc-300 dark:border-white/[0.07] dark:hover:bg-[#202135]"
+            }`}
           >
-            📝 Notes ({counts.note})
+            <FileText className="h-3.5 w-3.5" />
+            <span>Notes ({counts.note})</span>
           </button>
+
+          {/* All Tab */}
           <button
             type="button"
             onClick={() => onTabChange("all")}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${activeTab === "all"
-              ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-900 dark:text-zinc-50"
-              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-              }`}
+            className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
+              activeTab === "all"
+                ? "bg-purple-700 text-white shadow-sm shadow-purple-700/30 dark:bg-purple-600"
+                : "bg-white text-zinc-600 hover:text-zinc-900 border border-zinc-200/80 hover:bg-zinc-100 dark:bg-[#161726] dark:text-zinc-300 dark:border-white/[0.07] dark:hover:bg-[#202135]"
+            }`}
           >
-            All ({counts.all})
+            <Layers className="h-3.5 w-3.5" />
+            <span>All ({counts.all})</span>
           </button>
         </div>
 
-        {/* Search input */}
-        <div className="relative w-full sm:w-64">
+        {/* Search input: Right side on desktop */}
+        <div className="relative w-full md:w-64">
           <input
+            id="dashboard-search-input"
             type="text"
-            placeholder="Search titles, tags, notes..."
+            placeholder="Search anything..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full rounded-xl border border-zinc-200 bg-white py-1.5 pl-8 pr-8 text-xs text-zinc-900 placeholder-zinc-400 focus:border-indigo-600 focus:outline-none dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder-zinc-500"
+            className="w-full rounded-xl border border-zinc-200/90 bg-white py-2 pl-9 pr-8 text-xs text-zinc-900 placeholder-zinc-400 focus:border-purple-600 focus:outline-none dark:border-white/[0.08] dark:bg-[#161726] dark:text-zinc-100 dark:placeholder-zinc-500 shadow-2xs"
           />
-          <svg
-            className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
+          <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-400" />
           {searchQuery && (
             <button
               type="button"
               onClick={() => onSearchChange("")}
-              className="absolute right-2.5 top-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+              className="absolute right-2.5 top-2.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
             >
-              ×
+              <X className="h-3.5 w-3.5" />
             </button>
           )}
         </div>
       </div>
 
-      {/* Tag pills */}
-      {availableTags.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 pt-1">
-          <span className="text-[11px] font-medium text-zinc-400 mr-1">Tags:</span>
-          {selectedTag && (
-            <button
-              type="button"
-              onClick={() => onTagSelect(null)}
-              className="rounded-lg bg-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-200"
-            >
-              Clear tag filter ×
-            </button>
-          )}
-          {availableTags.map((tag) => (
+      {/* Tags row: hidden on mobile */}
+      <div className="hidden md:flex flex-wrap items-center gap-2 pt-0.5">
+        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          Tags:
+        </span>
+
+        {selectedTag && (
+          <button
+            type="button"
+            onClick={() => onTagSelect(null)}
+            className="inline-flex items-center gap-1 rounded-lg bg-purple-100 dark:bg-purple-950/80 border border-purple-300 dark:border-purple-800 px-2 py-0.5 text-xs font-semibold text-purple-700 dark:text-purple-300 cursor-pointer"
+          >
+            <span>#{selectedTag}</span>
+            <X className="h-3 w-3" />
+          </button>
+        )}
+
+        {displayTags.map((tag) => {
+          const isSelected = selectedTag === tag;
+          return (
             <button
               key={tag}
               type="button"
-              onClick={() => onTagSelect(selectedTag === tag ? null : tag)}
-              className={`rounded-lg px-2 py-0.5 text-[11px] font-medium transition-all ${selectedTag === tag
-                ? "bg-indigo-600 text-white shadow-xs"
-                : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
-                }`}
+              onClick={() => onTagSelect(isSelected ? null : tag)}
+              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-all cursor-pointer ${
+                isSelected
+                  ? "bg-purple-600 text-white shadow-xs"
+                  : "bg-white text-zinc-600 border border-zinc-200/80 hover:bg-zinc-100 dark:bg-[#161726] dark:text-zinc-300 dark:border-white/[0.06] dark:hover:bg-[#202135]"
+              }`}
             >
-              {tag}
+              #{tag}
             </button>
-          ))}
-        </div>
-      )}
+          );
+        })}
+      </div>
     </div>
   );
 }
-

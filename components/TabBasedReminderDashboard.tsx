@@ -174,24 +174,26 @@ export function TabBasedReminderDashboard({
       )}
 
       {/* 1. Dashboard Design: Three buttons/tabs [ Upcoming ] [ Overdue ] [ Completed ] */}
-      {/* Mobile-optimized: grid-cols-3 with min 44px tap height for Android Chrome */}
-      <div className="grid grid-cols-3 gap-1.5 sm:flex sm:items-center sm:gap-2 rounded-2xl bg-zinc-100/90 p-1.5 dark:bg-zinc-800/80">
+      {/* Mobile-optimized: grid-cols-3 with min 44px tap height for touch targets */}
+      <div className="grid grid-cols-3 gap-1.5 sm:flex sm:items-center sm:gap-2 rounded-2xl border border-zinc-200/80 dark:border-white/[0.07] bg-zinc-100/90 dark:bg-[#151624] p-1.5">
         {/* Tab 1: Upcoming (Default) */}
         <button
           type="button"
           onClick={() => setActiveTab("upcoming")}
-          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold transition-all cursor-pointer select-none sm:px-4 sm:min-h-[38px] ${activeTab === "upcoming"
-            ? "bg-white text-amber-700 shadow-sm dark:bg-zinc-900 dark:text-amber-400 ring-1 ring-amber-300/40 dark:ring-amber-500/30"
-            : "text-zinc-600 hover:text-zinc-900 hover:bg-white/50 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800/50"
-            }`}
+          className={`flex min-h-[44px] sm:min-h-[38px] items-center justify-center gap-1.5 sm:gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all cursor-pointer select-none ${
+            activeTab === "upcoming"
+              ? "bg-amber-600 text-white shadow-sm shadow-amber-600/30"
+              : "text-zinc-600 hover:text-zinc-900 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-white/[0.04]"
+          }`}
         >
-          <span className="text-sm">⏰</span>
+          <span className="text-sm">🔔</span>
           <span className="truncate">Upcoming</span>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${activeTab === "upcoming"
-              ? "bg-amber-100 text-amber-900 dark:bg-amber-950/80 dark:text-amber-200"
-              : "bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
-              }`}
+            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
+              activeTab === "upcoming"
+                ? "bg-amber-700/80 text-white"
+                : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+            }`}
           >
             {upcomingCount}
           </span>
@@ -201,20 +203,22 @@ export function TabBasedReminderDashboard({
         <button
           type="button"
           onClick={() => setActiveTab("overdue")}
-          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold transition-all cursor-pointer select-none sm:px-4 sm:min-h-[38px] ${activeTab === "overdue"
-            ? "bg-white text-rose-700 shadow-sm dark:bg-zinc-900 dark:text-rose-400 ring-1 ring-rose-300/50 dark:ring-rose-500/30"
-            : "text-zinc-600 hover:text-zinc-900 hover:bg-white/50 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800/50"
-            }`}
+          className={`flex min-h-[44px] sm:min-h-[38px] items-center justify-center gap-1.5 sm:gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all cursor-pointer select-none ${
+            activeTab === "overdue"
+              ? "bg-rose-600 text-white shadow-sm shadow-rose-600/30"
+              : "text-zinc-600 hover:text-zinc-900 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-white/[0.04]"
+          }`}
         >
           <span className="text-sm">⚠️</span>
           <span className="truncate">Overdue</span>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${activeTab === "overdue"
-              ? "bg-rose-100 text-rose-900 dark:bg-rose-950/80 dark:text-rose-200"
-              : overdueCount > 0
-                ? "bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 font-extrabold"
-                : "bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
-              }`}
+            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
+              activeTab === "overdue"
+                ? "bg-rose-700/80 text-white"
+                : overdueCount > 0
+                  ? "bg-rose-500/20 text-rose-600 dark:text-rose-400 font-extrabold"
+                  : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+            }`}
           >
             {overdueCount}
           </span>
@@ -224,18 +228,20 @@ export function TabBasedReminderDashboard({
         <button
           type="button"
           onClick={() => setActiveTab("completed")}
-          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold transition-all cursor-pointer select-none sm:px-4 sm:min-h-[38px] ${activeTab === "completed"
-            ? "bg-white text-emerald-700 shadow-sm dark:bg-zinc-900 dark:text-emerald-400 ring-1 ring-emerald-300/40 dark:ring-emerald-500/30"
-            : "text-zinc-600 hover:text-zinc-900 hover:bg-white/50 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800/50"
-            }`}
+          className={`flex min-h-[44px] sm:min-h-[38px] items-center justify-center gap-1.5 sm:gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all cursor-pointer select-none ${
+            activeTab === "completed"
+              ? "bg-emerald-600 text-white shadow-sm shadow-emerald-600/30"
+              : "text-zinc-600 hover:text-zinc-900 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-white/[0.04]"
+          }`}
         >
           <span className="text-sm">✓</span>
           <span className="truncate">Completed</span>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${activeTab === "completed"
-              ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/80 dark:text-emerald-200"
-              : "bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
-              }`}
+            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
+              activeTab === "completed"
+                ? "bg-emerald-700/80 text-white"
+                : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+            }`}
           >
             {completedCount}
           </span>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -112,6 +112,19 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
     stopRecording,
     cancelRecording,
   } = useVoiceRecorder();
+
+  // Listen for global custom event to trigger recording from mobile bottom nav or shortcuts
+  useEffect(() => {
+    const handleTriggerRecording = () => {
+      if (!isRecording && !isProcessing) {
+        startRecording();
+      }
+    };
+    window.addEventListener("start-voice-recording", handleTriggerRecording);
+    return () => {
+      window.removeEventListener("start-voice-recording", handleTriggerRecording);
+    };
+  }, [isRecording, isProcessing, startRecording]);
 
   /**
    * Creates a preview using local parsing when the API fails.
@@ -693,14 +706,15 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
               handleTextSubmit,
               handleTextError
             )}
-            className="flex items-center gap-1.5 sm:gap-2 rounded-2xl border border-zinc-200/90 bg-white p-1.5 sm:p-2 shadow-sm transition-all focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-600/15 dark:border-zinc-800 dark:bg-zinc-900"
+            className="flex items-center gap-1.5 sm:gap-2.5 rounded-2xl border border-zinc-200/90 bg-white p-2 sm:p-2.5 shadow-sm transition-all focus-within:border-purple-600 focus-within:ring-2 focus-within:ring-purple-600/15 dark:border-white/[0.08] dark:bg-[#151624]"
           >
             <input
               type="text"
+              id="capture-thought-input"
               {...register("text")}
               disabled={isProcessing}
               placeholder="Type a note, reminder, or task..."
-              className="flex-1 bg-transparent px-2.5 sm:px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:outline-none dark:text-zinc-100 dark:placeholder-zinc-500 min-w-0"
+              className="flex-1 bg-transparent px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:outline-none dark:text-zinc-100 dark:placeholder-zinc-500 min-w-0"
             />
 
             {/* Save Button */}
@@ -708,11 +722,10 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
               type="submit"
               disabled={isProcessing || !typedText?.trim()}
               size="sm"
-              className="h-10 px-3.5 sm:px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-sm shadow-indigo-600/20 shrink-0 flex items-center gap-1.5 transition-all disabled:opacity-40"
+              className="h-10 px-4 sm:px-5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs sm:text-sm shadow-md shadow-purple-600/25 shrink-0 flex items-center gap-1.5 transition-all disabled:opacity-40 cursor-pointer"
               title="Save typed text"
             >
               <span>Save</span>
-
               <svg
                 className="h-4 w-4"
                 fill="none"
@@ -733,8 +746,9 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
               type="button"
               onClick={startRecording}
               disabled={isProcessing}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition-transform active:scale-95 focus:outline-none"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-[#232438] dark:text-zinc-200 dark:hover:bg-[#2d2f49] transition-transform active:scale-95 focus:outline-none cursor-pointer"
               title="Record voice note"
+              aria-label="Record voice note"
             >
               <svg
                 className="h-5 w-5"
