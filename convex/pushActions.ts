@@ -45,20 +45,37 @@ export const dispatchPushAction = internalAction({
         return;
       }
 
-      const subscriptions = await ctx.runQuery(
-        internal.notifications.internalGetSubscriptionsByUser,
-        { userId: item.userId }
-      );
+      let subscriptions: Array<{ endpoint: string; p256dh: string; auth: string }> = [];
+      let notificationTitle = `⏰ Reminder: ${item.title}`;
+      let notificationBody = item.content || "Your scheduled reminder is due!";
+
+      if (item.teamId) {
+        const teamData = await ctx.runQuery(
+          internal.notifications.internalGetSubscriptionsForTeam,
+          { teamId: item.teamId }
+        );
+        subscriptions = teamData.subscriptions;
+        notificationTitle = `⏰ [${teamData.teamName}] ${item.title}`;
+        notificationBody = item.creatorName
+          ? `By ${item.creatorName}: ${item.content || "Team reminder is due!"}`
+          : item.content || "Team reminder is due!";
+      } else {
+        subscriptions = await ctx.runQuery(
+          internal.notifications.internalGetSubscriptionsByUser,
+          { userId: item.userId }
+        );
+      }
 
       if (!subscriptions || subscriptions.length === 0) {
-        console.log(`[pushActions] No push subscriptions for user ${item.userId}`);
+        console.log(`[pushActions] No push subscriptions for item ${item._id}`);
         return;
       }
 
       const payload = JSON.stringify({
-        title: `⏰ Reminder: ${item.title}`,
-        body: item.content || "Your scheduled reminder is due!",
+        title: notificationTitle,
+        body: notificationBody,
         itemId: item._id,
+        teamId: item.teamId,
         url: "/",
       });
 

@@ -25,8 +25,11 @@ export const listByUser = query({
       .order("desc")
       .collect();
 
+    // Only personal items (teamId === undefined)
+    const personalItems = items.filter((i) => i.teamId === undefined);
+
     // Sort pinned items first, then by createdAt desc
-    return items.sort((a, b) => {
+    return personalItems.sort((a, b) => {
       if (a.isPinned && !b.isPinned) return -1;
       if (!a.isPinned && b.isPinned) return 1;
       return b.createdAt - a.createdAt;
@@ -37,16 +40,76 @@ export const listByUser = query({
 export const listActiveReminders = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
-    const reminders = await ctx.db
+    // 1. Personal pending reminders
+    const personalReminders = await ctx.db
       .query("items")
       .withIndex("by_userId_type", (q) =>
         q.eq("userId", args.userId).eq("type", "reminder")
       )
       .collect();
 
-    return reminders.filter(
-      (r) => r.reminderStatus === "pending" && r.dueDate !== undefined
+    const activeList = personalReminders.filter(
+      (r) =>
+        r.teamId === undefined &&
+        r.reminderStatus === "pending" &&
+        r.dueDate !== undefined
     );
+
+    // 2. Team pending reminders for teams where user is an active member
+    const memberships = await ctx.db
+      .query("teamMembers")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    for (const m of memberships) {
+      const teamReminders = await ctx.db
+        .query("items")
+        .withIndex("by_teamId_type", (q) =>
+          q.eq("teamId", m.teamId).eq("type", "reminder")
+        )
+        .collect();
+
+      for (const tr of teamReminders) {
+        if (tr.reminderStatus === "pending" && tr.dueDate !== undefined) {
+          if (!activeList.some((item) => item._id === tr._id)) {
+            activeList.push(tr);
+          }
+        }
+      }
+    }
+
+    return activeList;
+  },
+});
+
+export const listByTeam = query({
+  args: {
+    teamId: v.id("teams"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    // Verify membership
+    const membership = await ctx.db
+      .query("teamMembers")
+      .withIndex("by_teamId_userId", (q) =>
+        q.eq("teamId", args.teamId).eq("userId", args.userId)
+      )
+      .first();
+
+    if (!membership) {
+      throw new Error("You are not a member of this team.");
+    }
+
+    const items = await ctx.db
+      .query("items")
+      .withIndex("by_teamId", (q) => q.eq("teamId", args.teamId))
+      .collect();
+
+    return items.sort((a, b) => {
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return b.createdAt - a.createdAt;
+    });
   },
 });
 
@@ -78,9 +141,31 @@ export const create = mutation({
         })
       )
     ),
+    teamId: v.optional(v.id("teams")),
+    creatorName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // If saving a team reminder, verify user is an active member of that team
+    if (args.teamId) {
+      const membership = await ctx.db
+        .query("teamMembers")
+        .withIndex("by_teamId_userId", (q) =>
+          q.eq("teamId", args.teamId!).eq("userId", args.userId)
+        )
+        .first();
+
+      if (!membership) {
+        throw new Error("You must be an active member of this team to add reminders.");
+      }
+    }
+
     const now = Date.now();
+    let creatorName = args.creatorName;
+    if (!creatorName && args.teamId) {
+      const u = await ctx.db.get(args.userId);
+      creatorName = u?.name || "Team member";
+    }
+
     const itemId = await ctx.db.insert("items", {
       userId: args.userId,
       type: args.type,
@@ -98,6 +183,8 @@ export const create = mutation({
       recurrenceDays: args.recurrenceDays,
       isNotified: false,
       checklist: args.checklist,
+      teamId: args.teamId,
+      creatorName,
       createdAt: now,
       updatedAt: now,
     });
@@ -151,6 +238,8 @@ export const update = mutation({
         })
       )
     ),
+    teamId: v.optional(v.union(v.id("teams"), v.null())),
+    isPinned: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { itemId, ...fields } = args;
@@ -168,6 +257,8 @@ export const update = mutation({
     if (fields.recurrenceMode !== undefined) updates.recurrenceMode = fields.recurrenceMode;
     if (fields.recurrenceDays !== undefined) updates.recurrenceDays = fields.recurrenceDays;
     if (fields.checklist !== undefined) updates.checklist = fields.checklist;
+    if (fields.teamId !== undefined) updates.teamId = fields.teamId === null ? undefined : fields.teamId;
+    if (fields.isPinned !== undefined) updates.isPinned = fields.isPinned;
 
     const finalType = fields.type ?? existing.type;
     const finalStatus = fields.reminderStatus ?? existing.reminderStatus;
@@ -217,10 +308,12 @@ export const togglePin = mutation({
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
     if (!item) throw new Error("Item not found");
+    const nextPinned = !Boolean(item.isPinned);
     await ctx.db.patch(args.itemId, {
-      isPinned: !item.isPinned,
+      isPinned: nextPinned,
       updatedAt: Date.now(),
     });
+    return nextPinned;
   },
 });
 
@@ -442,18 +535,40 @@ export const deleteItem = mutation({
 export const getReminderCounts = query({
   args: {
     userId: v.id("users"),
+    teamId: v.optional(v.id("teams")),
     clientNow: v.optional(v.number()),
     searchQuery: v.optional(v.string()),
     tag: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = args.clientNow ?? Date.now();
-    const reminders = await ctx.db
-      .query("items")
-      .withIndex("by_userId_type", (q) =>
-        q.eq("userId", args.userId).eq("type", "reminder")
-      )
-      .collect();
+    let reminders;
+
+    if (args.teamId) {
+      // Check membership
+      const membership = await ctx.db
+        .query("teamMembers")
+        .withIndex("by_teamId_userId", (q) =>
+          q.eq("teamId", args.teamId!).eq("userId", args.userId)
+        )
+        .first();
+      if (!membership) throw new Error("You are not a member of this team.");
+
+      reminders = await ctx.db
+        .query("items")
+        .withIndex("by_teamId_type", (q) =>
+          q.eq("teamId", args.teamId!).eq("type", "reminder")
+        )
+        .collect();
+    } else {
+      const allUserReminders = await ctx.db
+        .query("items")
+        .withIndex("by_userId_type", (q) =>
+          q.eq("userId", args.userId).eq("type", "reminder")
+        )
+        .collect();
+      reminders = allUserReminders.filter((r) => r.teamId === undefined);
+    }
 
     let upcoming = 0;
     let overdue = 0;
@@ -495,6 +610,7 @@ export const getReminderCounts = query({
 export const getRemindersByTab = query({
   args: {
     userId: v.id("users"),
+    teamId: v.optional(v.id("teams")),
     tab: v.union(
       v.literal("upcoming"),
       v.literal("overdue"),
@@ -507,12 +623,33 @@ export const getRemindersByTab = query({
   },
   handler: async (ctx, args) => {
     const now = args.clientNow ?? Date.now();
-    const reminders = await ctx.db
-      .query("items")
-      .withIndex("by_userId_type", (q) =>
-        q.eq("userId", args.userId).eq("type", "reminder")
-      )
-      .collect();
+    let reminders;
+
+    if (args.teamId) {
+      // Check membership
+      const membership = await ctx.db
+        .query("teamMembers")
+        .withIndex("by_teamId_userId", (q) =>
+          q.eq("teamId", args.teamId!).eq("userId", args.userId)
+        )
+        .first();
+      if (!membership) throw new Error("You are not a member of this team.");
+
+      reminders = await ctx.db
+        .query("items")
+        .withIndex("by_teamId_type", (q) =>
+          q.eq("teamId", args.teamId!).eq("type", "reminder")
+        )
+        .collect();
+    } else {
+      const allUserReminders = await ctx.db
+        .query("items")
+        .withIndex("by_userId_type", (q) =>
+          q.eq("userId", args.userId).eq("type", "reminder")
+        )
+        .collect();
+      reminders = allUserReminders.filter((r) => r.teamId === undefined);
+    }
 
     const queryFilter = args.searchQuery?.trim().toLowerCase();
     const tagFilter = args.tag;
@@ -531,6 +668,15 @@ export const getRemindersByTab = query({
       return true;
     });
 
+    const pinComparator = (a: any, b: any) => {
+      const aPinned = Boolean(a.isPinned);
+      const bPinned = Boolean(b.isPinned);
+      if (aPinned !== bPinned) {
+        return aPinned ? -1 : 1;
+      }
+      return 0;
+    };
+
     if (args.tab === "upcoming") {
       filtered = filtered
         .filter(
@@ -539,7 +685,7 @@ export const getRemindersByTab = query({
             r.dueDate !== undefined &&
             r.dueDate > now
         )
-        .sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
+        .sort((a, b) => pinComparator(a, b) || (a.dueDate || 0) - (b.dueDate || 0));
     } else if (args.tab === "overdue") {
       filtered = filtered
         .filter(
@@ -547,12 +693,13 @@ export const getRemindersByTab = query({
             r.reminderStatus !== "completed" &&
             (!r.dueDate || r.dueDate <= now)
         )
-        .sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
+        .sort((a, b) => pinComparator(a, b) || (a.dueDate || 0) - (b.dueDate || 0));
     } else if (args.tab === "completed") {
       filtered = filtered
         .filter((r) => r.reminderStatus === "completed")
         .sort(
           (a, b) =>
+            pinComparator(a, b) ||
             (b.updatedAt || b.dueDate || 0) - (a.updatedAt || a.dueDate || 0)
         );
     }

@@ -10,6 +10,7 @@ import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { WaveformVisualizer } from "./WaveformVisualizer";
 import { ItemPreviewDialog, StructuredItemData } from "./ItemPreviewDialog";
 import { Button } from "@/components/ui/button";
+import { Id } from "@/convex/_generated/dataModel";
 
 import {
   parseNaturalReminder,
@@ -31,6 +32,7 @@ type CaptureFormValues = z.infer<typeof captureSchema>;
 
 interface SmartCaptureBarProps {
   onSaveItem: (data: StructuredItemData | StructuredItemData[]) => Promise<void>;
+  userId?: Id<"users"> | null;
 }
 
 /**
@@ -79,7 +81,7 @@ function isExplicitListRequest(text: string): boolean {
   return false;
 }
 
-export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
+export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState("");
   const [previewData, setPreviewData] =
@@ -772,6 +774,7 @@ export function SmartCaptureBar({ onSaveItem }: SmartCaptureBarProps) {
       <ItemPreviewDialog
         isOpen={isPreviewOpen}
         itemData={previewData}
+        userId={userId}
         onClose={() => {
           setIsPreviewOpen(false);
           setPreviewData(null);

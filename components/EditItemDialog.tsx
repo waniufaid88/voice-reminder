@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import toast from "react-hot-toast";
 
 import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
 import { ItemRecord } from "./ItemCard";
 import { RecurrenceSelector } from "./RecurrenceSelector";
 import { DateTimePicker12h } from "./DateTimePicker12h";
@@ -33,11 +34,17 @@ import {
 
 interface EditItemDialogProps {
   item: ItemRecord | null;
+  userId?: Id<"users"> | null;
   onClose: () => void;
 }
 
-export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
+export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
   const updateItem = useMutation(api.items.update);
+  const myTeams = useQuery(
+    api.teams.getMyTeams,
+    userId ? { userId } : "skip"
+  );
+  const [selectedTeamId, setSelectedTeamId] = useState<Id<"teams"> | "personal">("personal");
   const [newChecklistText, setNewChecklistText] = useState("");
   const [newTagInput, setNewTagInput] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -77,6 +84,7 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
         checklist: item.checklist || [],
         tags: item.tags || [],
       });
+      setSelectedTeamId(item.teamId || "personal");
     }
   }, [item, reset]);
 
@@ -155,6 +163,7 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
             ? values.recurrenceDays
             : undefined,
         checklist: values.type === "list" ? values.checklist : undefined,
+        teamId: selectedTeamId === "personal" ? null : selectedTeamId,
       });
 
       toast.success("Item updated successfully!");
@@ -239,6 +248,45 @@ export function EditItemDialog({ item, onClose }: EditItemDialogProps) {
               </Button>
             </div>
           </div>
+
+          {/* Scope / Team Assignment */}
+          {myTeams && myTeams.length > 0 && (
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
+                Destination / Scope
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedTeamId("personal")}
+                  className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${
+                    selectedTeamId === "personal"
+                      ? "border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 font-semibold"
+                      : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-700"
+                  }`}
+                >
+                  👤 Personal
+                </button>
+                {myTeams.map((team) => {
+                  if (!team) return null;
+                  return (
+                    <button
+                      key={team._id}
+                      type="button"
+                      onClick={() => setSelectedTeamId(team._id)}
+                      className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${
+                        selectedTeamId === team._id
+                          ? "border-purple-600 bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 font-semibold"
+                          : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-700"
+                      }`}
+                    >
+                      👥 {team.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Title Field with Zod Validation */}
           <FormField

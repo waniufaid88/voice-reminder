@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import toast from "react-hot-toast";
-import { LogOut, ChevronDown, ChevronUp } from "lucide-react";
+import { LogOut, ChevronDown, ChevronUp, Users } from "lucide-react";
 
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -16,6 +16,7 @@ import { EditItemDialog } from "@/components/EditItemDialog";
 import { NotificationWatcher } from "@/components/NotificationWatcher";
 import { StructuredItemData } from "@/components/ItemPreviewDialog";
 import { TabBasedReminderDashboard } from "@/components/TabBasedReminderDashboard";
+import { TeamsSection } from "@/components/TeamsSection";
 import { MobileBottomNav } from "@/components/MobileBottomNav";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
@@ -44,7 +45,7 @@ export default function DashboardPage() {
   const [authLoading, setAuthLoading] = useState(true);
 
   // Filter & Search states
-  const [activeTab, setActiveTab] = useState<"all" | "note" | "reminder" | "list">("reminder");
+  const [activeTab, setActiveTab] = useState<"all" | "note" | "reminder" | "list" | "teams">("reminder");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<ItemRecord | null>(null);
@@ -99,6 +100,12 @@ export default function DashboardPage() {
     user?._id ? { userId: user._id as Id<"users"> } : "skip"
   );
 
+  // Teams subscription for authenticated user
+  const myTeams = useQuery(
+    api.teams.getMyTeams,
+    user?._id ? { userId: user._id as Id<"users"> } : "skip"
+  );
+
   // Available tags extracted dynamically
   const availableTags = useMemo(() => {
     if (!rawItems) return [];
@@ -134,14 +141,16 @@ export default function DashboardPage() {
 
   // Counts for main filter tabs
   const counts = useMemo(() => {
-    if (!rawItems) return { all: 0, note: 0, reminder: 0, list: 0 };
+    const teamsCount = myTeams ? myTeams.length : 0;
+    if (!rawItems) return { all: 0, note: 0, reminder: 0, list: 0, teams: teamsCount };
     return {
       all: rawItems.length,
       note: rawItems.filter((i) => i.type === "note").length,
       reminder: rawItems.filter((i) => i.type === "reminder").length,
       list: rawItems.filter((i) => i.type === "list").length,
+      teams: teamsCount,
     };
-  }, [rawItems]);
+  }, [rawItems, myTeams]);
 
   // Pinned non-reminders (notes & lists)
   const pinnedNonReminders = useMemo(
@@ -218,15 +227,20 @@ export default function DashboardPage() {
         tags: item.tags || [],
         audioStorageId,
         audioDuration: item.audioDuration,
+        teamId: item.teamId ?? undefined,
+        creatorName: user.name || "Member",
       });
     }
 
     if (itemsToSave.length > 1) {
       toast.success(`Created ${itemsToSave.length} reminders! ⏰`);
     } else {
+      const isTeam = Boolean(itemsToSave[0]?.teamId);
       const type = itemsToSave[0]?.type || "item";
       toast.success(
-        `Saved as ${type.charAt(0).toUpperCase() + type.slice(1)}!`
+        isTeam
+          ? `Saved as Team ${type.charAt(0).toUpperCase() + type.slice(1)}! 👥`
+          : `Saved as ${type.charAt(0).toUpperCase() + type.slice(1)}!`
       );
     }
   };
@@ -340,7 +354,7 @@ export default function DashboardPage() {
               Record voice or type text
             </span>
           </div>
-          <SmartCaptureBar onSaveItem={handleSaveItem} />
+          <SmartCaptureBar onSaveItem={handleSaveItem} userId={user?._id as Id<"users">} />
         </section>
 
         {/* Filter & Search Bar */}
@@ -367,6 +381,15 @@ export default function DashboardPage() {
               />
             ))}
           </div>
+        ) : activeTab === "teams" ? (
+          /* Dedicated Teams Section */
+          user?._id ? (
+            <TeamsSection
+              user={user}
+              currentTime={currentTime}
+              onEditItem={setEditingItem}
+            />
+          ) : null
         ) : activeTab === "reminder" ? (
           /* Dedicated Tab-Based Smart Reminder Dashboard */
           user?._id ? (
@@ -531,6 +554,7 @@ export default function DashboardPage() {
       {/* Edit Item Modal */}
       <EditItemDialog
         item={editingItem}
+        userId={user?._id as Id<"users">}
         onClose={() => setEditingItem(null)}
       />
 
@@ -556,6 +580,26 @@ export default function DashboardPage() {
                 </p>
               </div>
             </div>
+
+            {/* Quick Switch to Teams on Mobile */}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab("teams");
+                setIsMobileMoreOpen(false);
+              }}
+              className="w-full flex items-center justify-between p-3 rounded-xl border border-zinc-200 dark:border-white/[0.08] hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5">
+                <Users className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                <span className="font-medium text-zinc-800 dark:text-zinc-200">
+                  My Teams
+                </span>
+              </div>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 font-bold">
+                {counts.teams || 0}
+              </span>
+            </button>
 
             {/* Theme Toggle with only dark and light icons */}
             <div className="flex items-center justify-between p-3 rounded-xl border border-zinc-200 dark:border-white/[0.08]">

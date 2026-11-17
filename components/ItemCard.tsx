@@ -55,6 +55,8 @@ export interface ItemRecord {
   recurrenceMode?: "once" | "daily" | "custom";
   recurrenceDays?: number[];
   checklist?: Array<{ id: string; text: string; completed: boolean }>;
+  teamId?: Id<"teams">;
+  creatorName?: string;
   createdAt: number;
 }
 
@@ -135,9 +137,15 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
     totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
   const handleTogglePin = async () => {
-    await togglePin({ itemId: item._id });
-    setIsMenuOpen(false);
-    toast.success(item.isPinned ? "Unpinned item" : "Pinned to top 📌");
+    try {
+      const willPin = !Boolean(item.isPinned);
+      await togglePin({ itemId: item._id });
+      setIsMenuOpen(false);
+      toast.success(willPin ? "Pinned to top 📌" : "Unpinned item");
+    } catch (err) {
+      console.error("Failed to toggle pin:", err);
+      toast.error("Failed to update pin");
+    }
   };
 
   const handleConfirmDelete = async () => {
@@ -234,6 +242,13 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
               </span>
             )}
 
+            {/* Team Reminder Badge */}
+            {item.teamId && (
+              <span className="inline-flex items-center gap-1 rounded-lg bg-purple-500/15 border border-purple-500/30 px-2 py-0.5 text-[10px] font-semibold text-purple-700 dark:text-purple-300">
+                <span>👥</span> Team
+              </span>
+            )}
+
             {/* Recurrence Indicator for Reminders */}
             {item.type === "reminder" && (item.recurrenceMode === "daily" || item.isDaily) && (
               <span className="rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-300/60 dark:border-amber-800/40 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
@@ -261,7 +276,7 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
                   : "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/[0.04]"
               }`}
             >
-              <Pin className="h-3.5 w-3.5 fill-current" />
+              <Pin className={`h-3.5 w-3.5 ${item.isPinned ? "fill-current" : ""}`} />
             </button>
 
             {/* 3-Dots Dropdown Trigger */}
@@ -358,6 +373,13 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
         >
           {item.title}
         </h3>
+
+        {/* Team Reminder Creator Attribution */}
+        {item.creatorName && (
+          <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400 font-medium">
+            Created by <span className="font-semibold text-zinc-700 dark:text-zinc-200">{item.creatorName}</span>
+          </p>
+        )}
 
         {/* ================= REMINDER CARD SPECIFICS ================= */}
         {item.type === "reminder" && item.dueDate && (

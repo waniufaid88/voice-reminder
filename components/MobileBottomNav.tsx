@@ -1,10 +1,10 @@
 "use client";
 
-import { Home, Search, Mic, Bell, MoreHorizontal } from "lucide-react";
+import { Home, Users, Mic, Bell, MoreHorizontal } from "lucide-react";
 
 interface MobileBottomNavProps {
-  activeTab: "all" | "note" | "reminder" | "list";
-  onTabChange: (tab: "all" | "note" | "reminder" | "list") => void;
+  activeTab: "all" | "note" | "reminder" | "list" | "teams";
+  onTabChange: (tab: "all" | "note" | "reminder" | "list" | "teams") => void;
   onStartVoice: () => void;
   onFocusSearch: () => void;
   onOpenMore: () => void;
@@ -33,14 +33,18 @@ export function MobileBottomNav({
         <span className="text-[10px] mt-0.5">Home</span>
       </button>
 
-      {/* Search */}
+      {/* Teams */}
       <button
         type="button"
-        onClick={onFocusSearch}
-        className="flex flex-col items-center justify-center min-w-[56px] py-1 text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200 cursor-pointer transition-colors"
+        onClick={() => onTabChange("teams")}
+        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors ${
+          activeTab === "teams"
+            ? "text-indigo-600 dark:text-indigo-400 font-semibold"
+            : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+        }`}
       >
-        <Search className="h-5 w-5" />
-        <span className="text-[10px] mt-0.5">Search</span>
+        <Users className="h-5 w-5" />
+        <span className="text-[10px] mt-0.5">Teams</span>
       </button>
 
       {/* Center Floating Mic Button */}
@@ -53,7 +57,7 @@ export function MobileBottomNav({
         <Mic className="h-6 w-6" />
       </button>
 
-      {/* Reminders / Calendar */}
+      {/* Reminders */}
       <button
         type="button"
         onClick={() => onTabChange("reminder")}

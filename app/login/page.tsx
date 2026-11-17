@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -28,14 +28,18 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectUrl = searchParams.get("redirect") || "/";
+  const initialEmail = searchParams.get("email") || "";
+
   const [isLoading, setIsLoading] = useState(false);
 
   const form = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: "",
+      email: initialEmail,
       password: "",
     },
   });
@@ -53,7 +57,7 @@ export default function LoginPage() {
       toast.error(result.error || "Failed to log in.");
     } else {
       toast.success("Welcome back, " + (result.user?.name || "User") + "!");
-      router.push("/");
+      router.push(redirectUrl);
       router.refresh();
     }
     setIsLoading(false);
@@ -182,5 +186,19 @@ export default function LoginPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
+          <span className="text-sm text-zinc-500">Loading...</span>
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 }

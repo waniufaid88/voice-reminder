@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -28,15 +28,19 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectUrl = searchParams.get("redirect") || "/";
+  const initialEmail = searchParams.get("email") || "";
+
   const [isLoading, setIsLoading] = useState(false);
 
   const form = useForm<RegisterInput>({
     resolver: zodResolver(registerSchema),
     defaultValues: {
       name: "",
-      email: "",
+      email: initialEmail,
       password: "",
     },
   });
@@ -56,7 +60,7 @@ export default function RegisterPage() {
       setIsLoading(false);
     } else {
       toast.success("Account created! Welcome, " + (result.user?.name || "") + "!");
-      router.push("/");
+      router.push(redirectUrl);
       router.refresh();
     }
   }
@@ -204,5 +208,19 @@ export default function RegisterPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
+          <span className="text-sm text-zinc-500">Loading...</span>
+        </div>
+      }
+    >
+      <RegisterForm />
+    </Suspense>
   );
 }

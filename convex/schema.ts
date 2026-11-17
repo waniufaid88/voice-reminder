@@ -56,16 +56,63 @@ export default defineSchema({
       )
     ),
 
+    // Team specific fields (optional: undefined for personal items)
+    teamId: v.optional(v.id("teams")),
+    creatorName: v.optional(v.string()),
+
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_userId", ["userId"])
     .index("by_userId_type", ["userId", "type"])
     .index("by_userId_dueDate", ["userId", "dueDate"])
+    .index("by_teamId", ["teamId"])
+    .index("by_teamId_type", ["teamId", "type"])
+    .index("by_teamId_dueDate", ["teamId", "dueDate"])
     .searchIndex("search_content", {
       searchField: "content",
       filterFields: ["userId", "type"],
     }),
+
+  teams: defineTable({
+    name: v.string(),
+    description: v.optional(v.string()),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_createdById", ["createdById"]),
+
+  teamMembers: defineTable({
+    teamId: v.id("teams"),
+    userId: v.id("users"),
+    role: v.union(v.literal("owner"), v.literal("admin"), v.literal("member")),
+    joinedAt: v.number(),
+  })
+    .index("by_teamId", ["teamId"])
+    .index("by_userId", ["userId"])
+    .index("by_teamId_userId", ["teamId", "userId"]),
+
+  teamInvitations: defineTable({
+    teamId: v.id("teams"),
+    invitedEmail: v.string(),
+    invitedById: v.id("users"),
+    role: v.union(v.literal("admin"), v.literal("member")),
+    token: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("expired"),
+      v.literal("cancelled")
+    ),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_teamId", ["teamId"])
+    .index("by_invitedEmail", ["invitedEmail"])
+    .index("by_invitedEmail_status", ["invitedEmail", "status"])
+    .index("by_teamId_status", ["teamId", "status"]),
 
   pushSubscriptions: defineTable({
     userId: v.id("users"),

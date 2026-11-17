@@ -2,9 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
+import { useQuery } from "convex/react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import toast from "react-hot-toast";
 
+import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
 import { AudioPlayer } from "./AudioPlayer";
 import { RecurrenceSelector } from "./RecurrenceSelector";
 import { DateTimePicker12h } from "./DateTimePicker12h";
@@ -57,11 +60,14 @@ export interface StructuredItemData {
   rawTranscript?: string;
   isQuotaExhausted?: boolean;
   items?: StructuredItemData[];
+  teamId?: Id<"teams">;
+  creatorName?: string;
 }
 
 interface ItemPreviewDialogProps {
   isOpen: boolean;
   itemData: StructuredItemData | null;
+  userId?: Id<"users"> | null;
   onClose: () => void;
   onSave: (finalData: StructuredItemData | StructuredItemData[]) => Promise<void>;
 }
@@ -69,12 +75,19 @@ interface ItemPreviewDialogProps {
 export function ItemPreviewDialog({
   isOpen,
   itemData,
+  userId,
   onClose,
   onSave,
 }: ItemPreviewDialogProps) {
   const [newChecklistText, setNewChecklistText] = useState("");
   const [newTagInput, setNewTagInput] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [selectedTeamId, setSelectedTeamId] = useState<Id<"teams"> | null>(null);
+
+  const myTeams = useQuery(
+    api.teams.getMyTeams,
+    userId ? { userId } : "skip"
+  );
 
   // Multi-reminder batch state
   const [multiReminders, setMultiReminders] = useState<StructuredItemData[]>([]);
@@ -208,6 +221,7 @@ export function ItemPreviewDialog({
       checklist: itemData.checklist || [],
       tags: initialTags,
     });
+    setSelectedTeamId(itemData.teamId || null);
   }, [itemData, reset]);
 
   // Handlers for Multi-Reminder Mode
@@ -299,7 +313,11 @@ export function ItemPreviewDialog({
 
     setIsSaving(true);
     try {
-      await onSave(multiReminders);
+      const finalBatch = multiReminders.map((r) => ({
+        ...r,
+        teamId: selectedTeamId || undefined,
+      }));
+      await onSave(finalBatch);
       onClose();
     } catch {
       toast.error("Failed to save reminders");
@@ -426,6 +444,7 @@ export function ItemPreviewDialog({
             : undefined,
         checklist: values.type === "list" ? values.checklist : undefined,
         tags: values.tags,
+        teamId: selectedTeamId || undefined,
       });
 
       onClose();
@@ -474,6 +493,49 @@ export function ItemPreviewDialog({
                 src={itemData.audioPreviewUrl}
                 initialDuration={itemData.audioDuration}
               />
+            </div>
+          )}
+
+          {/* Team / Personal Assignment for Multi Reminders */}
+          {myTeams && myTeams.length > 0 && (
+            <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-zinc-200 dark:border-white/[0.08] bg-zinc-50/70 dark:bg-[#161726]">
+              <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                Save to:
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={!selectedTeamId ? "default" : "outline"}
+                  onClick={() => setSelectedTeamId(null)}
+                  className={`text-xs rounded-lg h-7 px-2.5 cursor-pointer ${
+                    !selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
+                  }`}
+                >
+                  👤 Personal
+                </Button>
+                <select
+                  value={selectedTeamId || ""}
+                  onChange={(e) =>
+                    setSelectedTeamId((e.target.value as Id<"teams">) || null)
+                  }
+                  className={`rounded-lg border px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer ${
+                    selectedTeamId
+                      ? "border-purple-600 bg-purple-50 text-purple-900 dark:bg-purple-950/60 dark:text-purple-200"
+                      : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#1f2034] text-zinc-600 dark:text-zinc-300"
+                  }`}
+                >
+                  <option value="">👥 Select Team (optional)</option>
+                  {myTeams.map((t) => {
+                    if (!t) return null;
+                    return (
+                      <option key={t._id} value={t._id}>
+                        👥 {t.name}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
             </div>
           )}
 
@@ -669,6 +731,52 @@ export function ItemPreviewDialog({
                   </Button>
                 </div>
               </div>
+
+              {/* Personal or Team Assignment */}
+              {myTeams && myTeams.length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
+                    Assign To
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={!selectedTeamId ? "default" : "outline"}
+                      onClick={() => setSelectedTeamId(null)}
+                      className={`text-xs rounded-xl h-8 cursor-pointer ${
+                        !selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
+                      }`}
+                    >
+                      👤 Personal
+                    </Button>
+
+                    <div className="flex-1">
+                      <select
+                        value={selectedTeamId || ""}
+                        onChange={(e) =>
+                          setSelectedTeamId((e.target.value as Id<"teams">) || null)
+                        }
+                        className={`w-full rounded-xl border px-3 py-1.5 text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
+                          selectedTeamId
+                            ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200"
+                            : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#161726] text-zinc-600 dark:text-zinc-400"
+                        }`}
+                      >
+                        <option value="">👥 Select Team (optional)</option>
+                        {myTeams.map((t) => {
+                          if (!t) return null;
+                          return (
+                            <option key={t._id} value={t._id}>
+                              👥 {t.name} ({t.userRole})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Audio preview player */}
               {itemData?.audioPreviewUrl && (

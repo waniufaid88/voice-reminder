@@ -1,10 +1,10 @@
 "use client";
 
-import { Bell, List, FileText, Layers, Search, X } from "lucide-react";
+import { Bell, List, FileText, Layers, Search, X, Users } from "lucide-react";
 
 interface FilterBarProps {
-  activeTab: "all" | "note" | "reminder" | "list";
-  onTabChange: (tab: "all" | "note" | "reminder" | "list") => void;
+  activeTab: "all" | "note" | "reminder" | "list" | "teams";
+  onTabChange: (tab: "all" | "note" | "reminder" | "list" | "teams") => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
   counts: {
@@ -12,6 +12,7 @@ interface FilterBarProps {
     note: number;
     reminder: number;
     list: number;
+    teams?: number;
   };
   availableTags: string[];
   selectedTag: string | null;
@@ -94,6 +95,20 @@ export function FilterBar({
           >
             <Layers className="h-3.5 w-3.5" />
             <span>All ({counts.all})</span>
+          </button>
+
+          {/* Teams Tab */}
+          <button
+            type="button"
+            onClick={() => onTabChange("teams")}
+            className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
+              activeTab === "teams"
+                ? "bg-indigo-600 text-white shadow-sm shadow-indigo-600/30"
+                : "bg-white text-zinc-600 hover:text-zinc-900 border border-zinc-200/80 hover:bg-zinc-100 dark:bg-[#161726] dark:text-zinc-300 dark:border-white/[0.07] dark:hover:bg-[#202135]"
+            }`}
+          >
+            <Users className="h-3.5 w-3.5" />
+            <span>Teams {counts.teams !== undefined ? `(${counts.teams})` : ""}</span>
           </button>
         </div>
 

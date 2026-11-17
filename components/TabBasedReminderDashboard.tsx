@@ -9,6 +9,7 @@ import { Button } from "./ui/button";
 
 interface TabBasedReminderDashboardProps {
   userId?: Id<"users"> | null;
+  teamId?: Id<"teams">;
   currentTime: number;
   searchQuery?: string;
   selectedTag?: string | null;
@@ -19,6 +20,7 @@ interface TabBasedReminderDashboardProps {
 
 export function TabBasedReminderDashboard({
   userId,
+  teamId,
   currentTime,
   searchQuery = "",
   selectedTag = null,
@@ -47,6 +49,7 @@ export function TabBasedReminderDashboard({
     userId
       ? {
           userId,
+          teamId,
           clientNow: currentTime > 0 ? currentTime : undefined,
           searchQuery: searchQuery || undefined,
           tag: selectedTag || undefined,
@@ -79,6 +82,7 @@ export function TabBasedReminderDashboard({
     userId
       ? {
           userId,
+          teamId,
           tab: activeTab,
           limit: currentLimit,
           clientNow: currentTime > 0 ? currentTime : undefined,
@@ -100,7 +104,7 @@ export function TabBasedReminderDashboard({
     >
   >({});
 
-  const cacheKey = `${activeTab}:${searchQuery}:${selectedTag || ""}`;
+  const cacheKey = `${teamId || "personal"}:${activeTab}:${searchQuery}:${selectedTag || ""}`;
 
   useEffect(() => {
     if (tabData !== undefined) {
@@ -174,22 +178,22 @@ export function TabBasedReminderDashboard({
       )}
 
       {/* 1. Dashboard Design: Three buttons/tabs [ Upcoming ] [ Overdue ] [ Completed ] */}
-      {/* Mobile-optimized: grid-cols-3 with min 44px tap height for touch targets */}
-      <div className="grid grid-cols-3 gap-1.5 sm:flex sm:items-center sm:gap-2 rounded-2xl border border-zinc-200/80 dark:border-white/[0.07] bg-zinc-100/90 dark:bg-[#151624] p-1.5">
+      {/* Mobile-optimized: responsive padding, font sizing, and touch targets */}
+      <div className="grid grid-cols-3 gap-1 sm:gap-2 rounded-2xl border border-zinc-200/80 dark:border-white/[0.07] bg-zinc-100/90 dark:bg-[#151624] p-1 sm:p-1.5">
         {/* Tab 1: Upcoming (Default) */}
         <button
           type="button"
           onClick={() => setActiveTab("upcoming")}
-          className={`flex min-h-[44px] sm:min-h-[38px] items-center justify-center gap-1.5 sm:gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all cursor-pointer select-none ${
+          className={`flex min-h-[40px] sm:min-h-[38px] items-center justify-center gap-1 sm:gap-1.5 rounded-xl px-1.5 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold transition-all cursor-pointer select-none ${
             activeTab === "upcoming"
               ? "bg-amber-600 text-white shadow-sm shadow-amber-600/30"
               : "text-zinc-600 hover:text-zinc-900 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-white/[0.04]"
           }`}
         >
-          <span className="text-sm">🔔</span>
+          <span className="text-xs sm:text-sm">🔔</span>
           <span className="truncate">Upcoming</span>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
+            className={`rounded-full px-1.5 py-0.5 text-[9px] sm:text-[10px] font-bold font-mono transition-colors ${
               activeTab === "upcoming"
                 ? "bg-amber-700/80 text-white"
                 : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
@@ -203,16 +207,16 @@ export function TabBasedReminderDashboard({
         <button
           type="button"
           onClick={() => setActiveTab("overdue")}
-          className={`flex min-h-[44px] sm:min-h-[38px] items-center justify-center gap-1.5 sm:gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all cursor-pointer select-none ${
+          className={`flex min-h-[40px] sm:min-h-[38px] items-center justify-center gap-1 sm:gap-1.5 rounded-xl px-1.5 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold transition-all cursor-pointer select-none ${
             activeTab === "overdue"
               ? "bg-rose-600 text-white shadow-sm shadow-rose-600/30"
               : "text-zinc-600 hover:text-zinc-900 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-white/[0.04]"
           }`}
         >
-          <span className="text-sm">⚠️</span>
+          <span className="text-xs sm:text-sm">⚠️</span>
           <span className="truncate">Overdue</span>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
+            className={`rounded-full px-1.5 py-0.5 text-[9px] sm:text-[10px] font-bold font-mono transition-colors ${
               activeTab === "overdue"
                 ? "bg-rose-700/80 text-white"
                 : overdueCount > 0
@@ -228,16 +232,16 @@ export function TabBasedReminderDashboard({
         <button
           type="button"
           onClick={() => setActiveTab("completed")}
-          className={`flex min-h-[44px] sm:min-h-[38px] items-center justify-center gap-1.5 sm:gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all cursor-pointer select-none ${
+          className={`flex min-h-[40px] sm:min-h-[38px] items-center justify-center gap-1 sm:gap-1.5 rounded-xl px-1.5 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold transition-all cursor-pointer select-none ${
             activeTab === "completed"
               ? "bg-emerald-600 text-white shadow-sm shadow-emerald-600/30"
               : "text-zinc-600 hover:text-zinc-900 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-white/[0.04]"
           }`}
         >
-          <span className="text-sm">✓</span>
+          <span className="text-xs sm:text-sm">✓</span>
           <span className="truncate">Completed</span>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
+            className={`rounded-full px-1.5 py-0.5 text-[9px] sm:text-[10px] font-bold font-mono transition-colors ${
               activeTab === "completed"
                 ? "bg-emerald-700/80 text-white"
                 : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"

@@ -15,6 +15,11 @@ const geist = Geist({
 export const metadata: Metadata = {
   title: "VoiceReminder",
   description: "Smart voice & text notes, reminders and lists",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/favicon.ico",
+    apple: "/icon-192.png",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

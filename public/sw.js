@@ -31,11 +31,12 @@ self.addEventListener("push", (event) => {
 
   const options = {
     body: data.body,
-    icon: "/favicon.ico",
-    badge: "/favicon.ico",
+    icon: "/icon-192.png",
+    badge: "/badge-72.png",
     tag,
     renotify: true,
     requireInteraction: true,
+    silent: false,
     vibrate: [300, 150, 300, 150, 300, 150, 500],
     data: {
       url: data.url || "/",

@@ -14,6 +14,7 @@ import type * as items from "../items.js";
 import type * as notifications from "../notifications.js";
 import type * as pushActions from "../pushActions.js";
 import type * as sessions from "../sessions.js";
+import type * as teams from "../teams.js";
 import type * as users from "../users.js";
 
 import type {
@@ -29,6 +30,7 @@ declare const fullApi: ApiFromModules<{
   notifications: typeof notifications;
   pushActions: typeof pushActions;
   sessions: typeof sessions;
+  teams: typeof teams;
   users: typeof users;
 }>;
 

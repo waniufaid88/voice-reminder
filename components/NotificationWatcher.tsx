@@ -147,12 +147,22 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
         }
 
         const subJson = subscription.toJSON();
-        if (subJson.endpoint && subJson.keys?.p256dh && subJson.keys?.auth) {
+        const rawP256dh = subscription.getKey ? subscription.getKey("p256dh") : null;
+        const rawAuth = subscription.getKey ? subscription.getKey("auth") : null;
+
+        const p256dh = rawP256dh
+          ? btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(rawP256dh))))
+          : subJson.keys?.p256dh;
+        const auth = rawAuth
+          ? btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(rawAuth))))
+          : subJson.keys?.auth;
+
+        if (subJson.endpoint && p256dh && auth) {
           await saveSubscription({
             userId,
             endpoint: subJson.endpoint,
-            p256dh: subJson.keys.p256dh,
-            auth: subJson.keys.auth,
+            p256dh,
+            auth,
             userAgent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
           });
         }
@@ -191,6 +201,24 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
         console.warn("[NotificationWatcher] SW registration error:", err);
       });
   }, [subscribeToWebPush]);
+
+  /**
+   * Automatically ensure Web Push is subscribed whenever userId becomes available.
+   * Eliminates the mobile race condition where userId was null on first mount.
+   */
+  useEffect(() => {
+    if (!userId) return;
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+    navigator.serviceWorker.ready
+      .then((reg) => {
+        subscribeToWebPush(reg);
+      })
+      .catch((err) => {
+        console.warn("[NotificationWatcher] serviceWorker.ready error:", err);
+      });
+  }, [userId, subscribeToWebPush]);
 
   /**
    * User interaction listener to pre-warm audio context (handles browser autoplay policies)
@@ -275,14 +303,16 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
             try {
               new Notification(`⏰ Reminder: ${item.title}`, {
                 body: item.content || "Your scheduled reminder is due!",
-                icon: "/favicon.ico",
+                icon: "/icon-192.png",
+                badge: "/badge-72.png",
               });
             } catch {
               // Notification fallback for mobile environments using ServiceWorker
               navigator.serviceWorker?.ready.then((reg) => {
                 reg.showNotification(`⏰ Reminder: ${item.title}`, {
                   body: item.content || "Your scheduled reminder is due!",
-                  icon: "/favicon.ico",
+                  icon: "/icon-192.png",
+                  badge: "/badge-72.png",
                 });
               });
             }

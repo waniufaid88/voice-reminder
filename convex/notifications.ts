@@ -87,6 +87,34 @@ export const internalGetSubscriptionsByUser = internalQuery({
 });
 
 /**
+ * Gets active push subscriptions for all members of a team.
+ */
+export const internalGetSubscriptionsForTeam = internalQuery({
+  args: { teamId: v.id("teams") },
+  handler: async (ctx, args) => {
+    const team = await ctx.db.get(args.teamId);
+    const members = await ctx.db
+      .query("teamMembers")
+      .withIndex("by_teamId", (q) => q.eq("teamId", args.teamId))
+      .collect();
+
+    const allSubs = [];
+    for (const m of members) {
+      const subs = await ctx.db
+        .query("pushSubscriptions")
+        .withIndex("by_userId", (q) => q.eq("userId", m.userId))
+        .collect();
+      allSubs.push(...subs);
+    }
+
+    return {
+      teamName: team?.name || "Team",
+      subscriptions: allSubs,
+    };
+  },
+});
+
+/**
  * Retrieves a reminder item for Web Push notification dispatch.
  */
 export const getItemForPush = query({
