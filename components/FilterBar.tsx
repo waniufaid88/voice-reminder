@@ -97,18 +97,18 @@ export function FilterBar({
             <span>All ({counts.all})</span>
           </button>
 
-          {/* Teams Tab */}
+          {/* Teams Tab - Prominently Highlighted */}
           <button
             type="button"
             onClick={() => onTabChange("teams")}
             className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
               activeTab === "teams"
-                ? "bg-indigo-600 text-white shadow-sm shadow-indigo-600/30"
-                : "bg-white text-zinc-600 hover:text-zinc-900 border border-zinc-200/80 hover:bg-zinc-100 dark:bg-[#161726] dark:text-zinc-300 dark:border-white/[0.07] dark:hover:bg-[#202135]"
+                ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-600/30 ring-2 ring-purple-400/40"
+                : "bg-white text-purple-700 hover:text-purple-900 border-2 border-purple-200/90 hover:bg-purple-50/60 dark:bg-[#161726] dark:text-purple-300 dark:border-purple-800/50 dark:hover:bg-purple-950/40"
             }`}
           >
             <Users className="h-3.5 w-3.5" />
-            <span>Teams {counts.teams !== undefined ? `(${counts.teams})` : ""}</span>
+            <span>👥 Teams {counts.teams !== undefined ? `(${counts.teams})` : ""}</span>
           </button>
         </div>
 

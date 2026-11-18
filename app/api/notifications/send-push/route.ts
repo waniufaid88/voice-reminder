@@ -13,6 +13,7 @@ export async function POST(req: NextRequest) {
     let pushTitle = title || "⏰ Reminder Due";
     let pushBody = content || "You have a scheduled reminder!";
     let pushItemId = itemId;
+    let subscriptions: Array<{ endpoint: string; p256dh: string; auth: string }> = [];
 
     if (itemId) {
       const item = await convexServer.query(api.notifications.getItemForPush, {
@@ -28,26 +29,42 @@ export async function POST(req: NextRequest) {
       }
 
       targetUserId = item.userId;
-      pushTitle = `⏰ Reminder: ${item.title}`;
-      pushBody = item.content || "Your scheduled reminder is due!";
       pushItemId = item._id;
-    }
 
-    if (!targetUserId) {
-      return NextResponse.json({ error: "Missing userId or itemId" }, { status: 400 });
-    }
-
-    // Fetch user's registered Web Push subscriptions
-    const subscriptions = await convexServer.query(
-      api.notifications.getSubscriptionsByUser,
-      {
-        userId: targetUserId as Id<"users">,
+      if (item.teamId) {
+        const teamData = await convexServer.query(
+          api.notifications.getSubscriptionsForTeam,
+          { teamId: item.teamId }
+        );
+        pushTitle = `⏰ [${teamData.teamName}] ${item.title}`;
+        pushBody = item.creatorName
+          ? `By ${item.creatorName}: ${item.content || "Team reminder is due!"}`
+          : item.content || "Team reminder is due!";
+        subscriptions = teamData.subscriptions;
+      } else {
+        pushTitle = `⏰ Reminder: ${item.title}`;
+        pushBody = item.content || "Your scheduled reminder is due!";
       }
-    );
+    }
+
+    if (subscriptions.length === 0) {
+      if (!targetUserId) {
+        return NextResponse.json({ error: "Missing userId or itemId" }, { status: 400 });
+      }
+
+      // Fetch user's registered Web Push subscriptions
+      const userSubs = await convexServer.query(
+        api.notifications.getSubscriptionsByUser,
+        {
+          userId: targetUserId as Id<"users">,
+        }
+      );
+      subscriptions = userSubs || [];
+    }
 
     if (!subscriptions || subscriptions.length === 0) {
       return NextResponse.json({
-        message: "No active push subscriptions for user",
+        message: "No active push subscriptions found",
         sentCount: 0,
       });
     }

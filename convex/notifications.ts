@@ -87,30 +87,64 @@ export const internalGetSubscriptionsByUser = internalQuery({
 });
 
 /**
- * Gets active push subscriptions for all members of a team.
+ * Helper to fetch unique push subscriptions for all active members of a team.
+ */
+async function getTeamSubscriptionsHelper(ctx: any, teamId: any) {
+  const team = await ctx.db.get(teamId);
+  const members = await ctx.db
+    .query("teamMembers")
+    .withIndex("by_teamId", (q: any) => q.eq("teamId", teamId))
+    .collect();
+
+  const userIds = new Set<string>();
+  for (const m of members) {
+    userIds.add(m.userId);
+  }
+  if (team?.createdById) {
+    userIds.add(team.createdById);
+  }
+
+  const endpointMap = new Map<string, { endpoint: string; p256dh: string; auth: string }>();
+  for (const uId of userIds) {
+    const subs = await ctx.db
+      .query("pushSubscriptions")
+      .withIndex("by_userId", (q: any) => q.eq("userId", uId))
+      .collect();
+
+    for (const s of subs) {
+      if (s.endpoint && s.p256dh && s.auth) {
+        endpointMap.set(s.endpoint, {
+          endpoint: s.endpoint,
+          p256dh: s.p256dh,
+          auth: s.auth,
+        });
+      }
+    }
+  }
+
+  return {
+    teamName: team?.name || "Team",
+    subscriptions: Array.from(endpointMap.values()),
+  };
+}
+
+/**
+ * Gets active push subscriptions for all members of a team (public query).
+ */
+export const getSubscriptionsForTeam = query({
+  args: { teamId: v.id("teams") },
+  handler: async (ctx, args) => {
+    return await getTeamSubscriptionsHelper(ctx, args.teamId);
+  },
+});
+
+/**
+ * Gets active push subscriptions for all members of a team (internal query).
  */
 export const internalGetSubscriptionsForTeam = internalQuery({
   args: { teamId: v.id("teams") },
   handler: async (ctx, args) => {
-    const team = await ctx.db.get(args.teamId);
-    const members = await ctx.db
-      .query("teamMembers")
-      .withIndex("by_teamId", (q) => q.eq("teamId", args.teamId))
-      .collect();
-
-    const allSubs = [];
-    for (const m of members) {
-      const subs = await ctx.db
-        .query("pushSubscriptions")
-        .withIndex("by_userId", (q) => q.eq("userId", m.userId))
-        .collect();
-      allSubs.push(...subs);
-    }
-
-    return {
-      teamName: team?.name || "Team",
-      subscriptions: allSubs,
-    };
+    return await getTeamSubscriptionsHelper(ctx, args.teamId);
   },
 });
 

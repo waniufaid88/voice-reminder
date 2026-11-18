@@ -23,27 +23,31 @@ export function MobileBottomNav({
       <button
         type="button"
         onClick={() => onTabChange("all")}
-        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors ${
-          activeTab === "all"
+        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors ${activeTab === "all"
             ? "text-purple-600 dark:text-purple-400 font-semibold"
             : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
-        }`}
+          }`}
       >
         <Home className="h-5 w-5" />
         <span className="text-[10px] mt-0.5">Home</span>
       </button>
 
-      {/* Teams */}
+      {/* Teams - Prominently Highlighted */}
       <button
         type="button"
         onClick={() => onTabChange("teams")}
-        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors ${
+        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors relative ${
           activeTab === "teams"
-            ? "text-indigo-600 dark:text-indigo-400 font-semibold"
-            : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+            ? "text-purple-600 dark:text-purple-400 font-bold"
+            : "text-zinc-500 hover:text-purple-600 dark:text-zinc-400 dark:hover:text-purple-300"
         }`}
       >
-        <Users className="h-5 w-5" />
+        <div className="relative">
+          <Users className={`h-5 w-5 ${activeTab === "teams" ? "stroke-[2.5]" : ""}`} />
+          {activeTab === "teams" && (
+            <span className="absolute -top-1 -right-1 flex h-2 w-2 rounded-full bg-purple-600 animate-pulse" />
+          )}
+        </div>
         <span className="text-[10px] mt-0.5">Teams</span>
       </button>
 
@@ -61,11 +65,10 @@ export function MobileBottomNav({
       <button
         type="button"
         onClick={() => onTabChange("reminder")}
-        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors ${
-          activeTab === "reminder"
+        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors ${activeTab === "reminder"
             ? "text-purple-600 dark:text-purple-400 font-semibold"
             : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
-        }`}
+          }`}
       >
         <Bell className="h-5 w-5" />
         <span className="text-[10px] mt-0.5">Reminders</span>

@@ -26,13 +26,17 @@ self.addEventListener("push", (event) => {
     }
   }
 
+  const origin = self.location.origin || "";
   const itemId = data.itemId || data.data?.itemId;
   const tag = itemId ? `reminder-${itemId}` : `reminder-${Date.now()}`;
 
+  const iconUrl = origin ? `${origin}/icon-192.png` : "/icon-192.png";
+  const badgeUrl = origin ? `${origin}/badge-72.png` : "/badge-72.png";
+
   const options = {
     body: data.body,
-    icon: "/icon-192.png",
-    badge: "/badge-72.png",
+    icon: iconUrl,
+    badge: badgeUrl,
     tag,
     renotify: true,
     requireInteraction: true,
@@ -57,9 +61,42 @@ self.addEventListener("push", (event) => {
     ],
   };
 
-  event.waitUntil(
-    self.registration.showNotification(data.title, options)
-  );
+  // Robust display: ensure showNotification never fails silently on mobile Android Chrome
+  const showNotificationPromise = self.registration
+    .showNotification(data.title, options)
+    .catch((err) => {
+      console.warn("[sw.js] showNotification with full options failed, retrying simplified:", err);
+      return self.registration.showNotification(data.title, {
+        body: data.body,
+        icon: iconUrl,
+        badge: badgeUrl,
+        tag,
+        data: {
+          url: data.url || "/",
+          itemId,
+        },
+      });
+    });
+
+  const notifyClientsPromise = self.clients
+    .matchAll({ type: "window", includeUncontrolled: true })
+    .then((clients) => {
+      clients.forEach((client) => {
+        try {
+          client.postMessage({
+            type: "PUSH_REMINDER_NOTIFICATION",
+            itemId,
+            title: data.title,
+            content: data.body,
+          });
+        } catch {
+          // Window client might be closing
+        }
+      });
+    })
+    .catch(() => {});
+
+  event.waitUntil(Promise.all([showNotificationPromise, notifyClientsPromise]));
 });
 
 // Handle notification click and action buttons

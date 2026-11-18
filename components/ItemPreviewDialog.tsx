@@ -91,7 +91,8 @@ export function ItemPreviewDialog({
 
   // Multi-reminder batch state
   const [multiReminders, setMultiReminders] = useState<StructuredItemData[]>([]);
-  const isMultiReminderMode = multiReminders.length > 1;
+  const [isBatchMode, setIsBatchMode] = useState(false);
+  const isMultiReminderMode = isBatchMode && multiReminders.length > 0;
 
   const form = useForm<ItemFormValues>({
     resolver: zodResolver(itemSchema),
@@ -129,13 +130,15 @@ export function ItemPreviewDialog({
 
   // Initialize form or multi-reminders state when itemData changes
   useEffect(() => {
-    if (!itemData) {
+    if (!isOpen || !itemData) {
       setMultiReminders([]);
+      setIsBatchMode(false);
       return;
     }
 
     // If multiple reminders were detected
     if (itemData.items && itemData.items.length > 1) {
+      setIsBatchMode(true);
       setMultiReminders(
         itemData.items.map((it) => {
           let dueDateLocal = it.dueDateLocal;
@@ -148,9 +151,11 @@ export function ItemPreviewDialog({
           };
         })
       );
+      setSelectedTeamId(itemData.teamId || null);
       return;
     }
 
+    setIsBatchMode(false);
     setMultiReminders([]);
 
     const cleanContent =
@@ -222,7 +227,7 @@ export function ItemPreviewDialog({
       tags: initialTags,
     });
     setSelectedTeamId(itemData.teamId || null);
-  }, [itemData, reset]);
+  }, [isOpen, itemData, reset]);
 
   // Handlers for Multi-Reminder Mode
   const updateReminderTitle = (index: number, title: string) => {
@@ -274,10 +279,7 @@ export function ItemPreviewDialog({
   };
 
   const handleAddAnotherReminder = () => {
-    const now = new Date();
-    now.setHours(now.getHours() + 1);
-    now.setMinutes(0);
-    const localStr = formatLocalDatetime(now.getTime());
+    const localStr = formatLocalDatetime(Date.now());
 
     setMultiReminders((prev) => [
       ...prev,
@@ -285,7 +287,7 @@ export function ItemPreviewDialog({
         type: "reminder",
         title: `Reminder ${prev.length + 1}`,
         content: "",
-        dueDate: now.getTime(),
+        dueDate: Date.now(),
         dueDateLocal: localStr,
         recurrenceMode: "once",
         isDaily: false,
@@ -298,25 +300,38 @@ export function ItemPreviewDialog({
   };
 
   const handleSaveAllMultiReminders = async () => {
+    if (isSaving) return;
+
     // Validate each reminder has title and date
     for (let i = 0; i < multiReminders.length; i++) {
       const rem = multiReminders[i];
-      if (!rem.title.trim()) {
+      if (!rem.title || !rem.title.trim()) {
         toast.error(`Reminder ${i + 1} needs a title`);
         return;
       }
       if (!rem.dueDateLocal) {
-        toast.error(`Reminder ${i + 1} ("${rem.title}") needs a scheduled time`);
+        toast.error(`Reminder ${i + 1} ("${rem.title.trim()}") needs a scheduled time`);
         return;
       }
     }
 
     setIsSaving(true);
     try {
-      const finalBatch = multiReminders.map((r) => ({
-        ...r,
-        teamId: selectedTeamId || undefined,
-      }));
+      const offset = new Date().getTimezoneOffset();
+      const finalBatch = multiReminders.map((r) => {
+        let finalDueDate = r.dueDate;
+        if (r.dueDateLocal && (!finalDueDate || isNaN(finalDueDate))) {
+          finalDueDate = parseLocalDatetime(r.dueDateLocal, offset) ?? null;
+        }
+        return {
+          ...r,
+          title: r.title.trim(),
+          content: r.content ? r.content.trim() : "",
+          dueDate: finalDueDate ?? null,
+          dueDateLocal: r.dueDateLocal,
+          teamId: selectedTeamId || undefined,
+        };
+      });
       await onSave(finalBatch);
       onClose();
     } catch {
@@ -461,14 +476,15 @@ export function ItemPreviewDialog({
       {/* MULTI-REMINDER BATCH REVIEW VIEW                     */}
       {/* ---------------------------------------------------- */}
       {isMultiReminderMode ? (
-        <div className="space-y-4">
-          <DialogHeader>
+        <div className="flex flex-col flex-1 min-h-0 max-h-[calc(94vh-1.75rem)] sm:max-h-[calc(94vh-3rem)] overflow-hidden">
+          {/* Top fixed Header */}
+          <DialogHeader className="shrink-0 pb-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <DialogTitle className="text-base font-bold">
                   Review Reminders
                 </DialogTitle>
-                <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300">
+                <span className="rounded-full bg-purple-100 px-2.5 py-0.5 text-xs font-semibold text-purple-700 dark:bg-purple-950/80 dark:text-purple-300">
                   {multiReminders.length} detected
                 </span>
               </div>
@@ -476,7 +492,9 @@ export function ItemPreviewDialog({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
+                disabled={isSaving}
+                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 disabled:opacity-50 cursor-pointer"
+                title="Discard and close"
               >
                 ✕
               </button>
@@ -486,19 +504,9 @@ export function ItemPreviewDialog({
             </p>
           </DialogHeader>
 
-          {/* Voice recording audio playback if available */}
-          {itemData?.audioPreviewUrl && (
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/50">
-              <AudioPlayer
-                src={itemData.audioPreviewUrl}
-                initialDuration={itemData.audioDuration}
-              />
-            </div>
-          )}
-
           {/* Team / Personal Assignment for Multi Reminders */}
           {myTeams && myTeams.length > 0 && (
-            <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-zinc-200 dark:border-white/[0.08] bg-zinc-50/70 dark:bg-[#161726]">
+            <div className="shrink-0 my-2.5 flex items-center justify-between gap-3 p-2.5 rounded-xl border border-zinc-200 dark:border-white/[0.08] bg-zinc-50/70 dark:bg-[#161726]">
               <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Save to:
               </span>
@@ -508,9 +516,9 @@ export function ItemPreviewDialog({
                   size="sm"
                   variant={!selectedTeamId ? "default" : "outline"}
                   onClick={() => setSelectedTeamId(null)}
-                  className={`text-xs rounded-lg h-7 px-2.5 cursor-pointer ${
-                    !selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
-                  }`}
+                  disabled={isSaving}
+                  className={`text-xs rounded-lg h-7 px-2.5 cursor-pointer ${!selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
+                    }`}
                 >
                   👤 Personal
                 </Button>
@@ -519,11 +527,11 @@ export function ItemPreviewDialog({
                   onChange={(e) =>
                     setSelectedTeamId((e.target.value as Id<"teams">) || null)
                   }
-                  className={`rounded-lg border px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer ${
-                    selectedTeamId
-                      ? "border-purple-600 bg-purple-50 text-purple-900 dark:bg-purple-950/60 dark:text-purple-200"
-                      : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#1f2034] text-zinc-600 dark:text-zinc-300"
-                  }`}
+                  disabled={isSaving}
+                  className={`rounded-lg border px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer ${selectedTeamId
+                    ? "border-purple-600 bg-purple-50 text-purple-900 dark:bg-purple-950/60 dark:text-purple-200"
+                    : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#1f2034] text-zinc-600 dark:text-zinc-300"
+                    }`}
                 >
                   <option value="">👥 Select Team (optional)</option>
                   {myTeams.map((t) => {
@@ -540,7 +548,17 @@ export function ItemPreviewDialog({
           )}
 
           {/* Scrollable list of detected reminder cards */}
-          <div className="max-h-[60vh] space-y-3.5 overflow-y-auto pr-1">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3.5">
+            {/* Voice recording audio playback if available */}
+            {itemData?.audioPreviewUrl && (
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/50">
+                <AudioPlayer
+                  src={itemData.audioPreviewUrl}
+                  initialDuration={itemData.audioDuration}
+                />
+              </div>
+            )}
+
             {multiReminders.map((rem, idx) => (
               <div
                 key={idx}
@@ -549,7 +567,7 @@ export function ItemPreviewDialog({
                 {/* Header row with reminder index and remove button */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-purple-600 text-[10px] font-bold text-white">
                       {idx + 1}
                     </span>
                     <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
@@ -560,7 +578,8 @@ export function ItemPreviewDialog({
                   <button
                     type="button"
                     onClick={() => handleRemoveReminder(idx)}
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors"
+                    disabled={isSaving}
+                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors disabled:opacity-50 cursor-pointer"
                     title="Remove reminder"
                   >
                     <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -578,6 +597,7 @@ export function ItemPreviewDialog({
                   <Input
                     value={rem.title}
                     onChange={(e) => updateReminderTitle(idx, e.target.value)}
+                    disabled={isSaving}
                     placeholder="e.g. Call my friend"
                     className="h-8 text-xs font-semibold"
                   />
@@ -602,6 +622,7 @@ export function ItemPreviewDialog({
                   <Input
                     value={rem.content}
                     onChange={(e) => updateReminderContent(idx, e.target.value)}
+                    disabled={isSaving}
                     placeholder="e.g. Discuss assignment with team"
                     className="h-8 text-xs text-zinc-600 dark:text-zinc-400"
                   />
@@ -615,9 +636,10 @@ export function ItemPreviewDialog({
                       <button
                         key={mode}
                         type="button"
+                        disabled={isSaving}
                         onClick={() => updateReminderRecurrence(idx, mode)}
-                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${(rem.recurrenceMode || "once") === mode
-                          ? "bg-indigo-600 text-white shadow-2xs font-semibold"
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${(rem.recurrenceMode || "once") === mode
+                          ? "bg-purple-600 text-white shadow-2xs font-semibold"
                           : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"
                           }`}
                       >
@@ -633,20 +655,22 @@ export function ItemPreviewDialog({
             <button
               type="button"
               onClick={handleAddAnotherReminder}
-              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-zinc-300 py-2.5 text-xs font-semibold text-zinc-600 hover:border-indigo-400 hover:text-indigo-600 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-indigo-500 dark:hover:text-indigo-400 transition-colors"
+              disabled={isSaving}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-zinc-300 py-2.5 text-xs font-semibold text-zinc-600 hover:border-purple-400 hover:text-purple-600 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-purple-500 dark:hover:text-purple-400 transition-colors disabled:opacity-50 cursor-pointer"
             >
               <span>+</span> Add another reminder
             </button>
           </div>
 
-          {/* Batch Save Footer */}
-          <DialogFooter className="mt-4 flex sm:justify-between items-center gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+          {/* Sticky/Pinned Batch Save Footer */}
+          <div className="shrink-0 flex items-center justify-between gap-3 pt-3 mt-3 border-t border-zinc-200/80 dark:border-white/[0.08]">
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={onClose}
               disabled={isSaving}
+              className="h-9 sm:h-10 px-4 rounded-xl border-zinc-200 dark:border-white/[0.1] text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-medium text-xs sm:text-sm cursor-pointer transition-all"
             >
               Cancel
             </Button>
@@ -656,21 +680,23 @@ export function ItemPreviewDialog({
               size="sm"
               onClick={handleSaveAllMultiReminders}
               disabled={isSaving || multiReminders.length === 0}
-              className="bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm"
+              className="h-9 sm:h-10 px-4 sm:px-5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs sm:text-sm shadow-md shadow-purple-600/20 active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSaving ? (
                 <div className="flex items-center gap-1.5">
-                  <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <svg className="h-4 w-4 animate-spin text-white" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                   <span>Saving...</span>
                 </div>
               ) : (
-                <span>✓ Save All Reminders ({multiReminders.length})</span>
+                <span>
+                  Add {multiReminders.length} Reminder{multiReminders.length === 1 ? "" : "s"}
+                </span>
               )}
             </Button>
-          </DialogFooter>
+          </div>
         </div>
       ) : (
         /* ---------------------------------------------------- */
@@ -694,172 +720,111 @@ export function ItemPreviewDialog({
           <Form {...form}>
             <form
               onSubmit={handleSubmit(onSubmit)}
-              className="mt-4 space-y-4 max-h-[75vh] overflow-y-auto pr-1"
+              className="flex flex-col flex-1 min-h-0 overflow-hidden mt-4"
             >
-              {/* Category Tabs */}
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
-                  Category
-                </label>
+              {/* Scrollable Form Content */}
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-2">
 
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant={currentType === "note" ? "default" : "secondary"}
-                    className={`flex-1 ${currentType === "note" ? "bg-indigo-600 text-white" : ""}`}
-                    onClick={() => setValue("type", "note", { shouldValidate: true })}
-                  >
-                    📝 Note
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant={currentType === "reminder" ? "default" : "secondary"}
-                    className={`flex-1 ${currentType === "reminder" ? "bg-amber-500 text-white hover:bg-amber-600" : ""}`}
-                    onClick={handleSelectReminder}
-                  >
-                    ⏰ Reminder
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant={currentType === "list" ? "default" : "secondary"}
-                    className={`flex-1 ${currentType === "list" ? "bg-emerald-600 text-white" : ""}`}
-                    onClick={() => setValue("type", "list", { shouldValidate: true })}
-                  >
-                    ☑️ List
-                  </Button>
-                </div>
-              </div>
-
-              {/* Personal or Team Assignment */}
-              {myTeams && myTeams.length > 0 && (
+                {/* Category Tabs */}
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
-                    Assign To
+                    Category
                   </label>
-                  <div className="flex items-center gap-2">
+
+                  <div className="flex gap-2">
                     <Button
                       type="button"
-                      size="sm"
-                      variant={!selectedTeamId ? "default" : "outline"}
-                      onClick={() => setSelectedTeamId(null)}
-                      className={`text-xs rounded-xl h-8 cursor-pointer ${
-                        !selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
-                      }`}
+                      variant={currentType === "note" ? "default" : "secondary"}
+                      className={`flex-1 ${currentType === "note" ? "bg-indigo-600 text-white" : ""}`}
+                      onClick={() => setValue("type", "note", { shouldValidate: true })}
                     >
-                      👤 Personal
+                      📝 Note
                     </Button>
 
-                    <div className="flex-1">
-                      <select
-                        value={selectedTeamId || ""}
-                        onChange={(e) =>
-                          setSelectedTeamId((e.target.value as Id<"teams">) || null)
-                        }
-                        className={`w-full rounded-xl border px-3 py-1.5 text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
-                          selectedTeamId
-                            ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200"
-                            : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#161726] text-zinc-600 dark:text-zinc-400"
-                        }`}
-                      >
-                        <option value="">👥 Select Team (optional)</option>
-                        {myTeams.map((t) => {
-                          if (!t) return null;
-                          return (
-                            <option key={t._id} value={t._id}>
-                              👥 {t.name} ({t.userRole})
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
+                    <Button
+                      type="button"
+                      variant={currentType === "reminder" ? "default" : "secondary"}
+                      className={`flex-1 ${currentType === "reminder" ? "bg-amber-500 text-white hover:bg-amber-600" : ""}`}
+                      onClick={handleSelectReminder}
+                    >
+                      ⏰ Reminder
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant={currentType === "list" ? "default" : "secondary"}
+                      className={`flex-1 ${currentType === "list" ? "bg-emerald-600 text-white" : ""}`}
+                      onClick={() => setValue("type", "list", { shouldValidate: true })}
+                    >
+                      ☑️ List
+                    </Button>
                   </div>
                 </div>
-              )}
 
-              {/* Audio preview player */}
-              {itemData?.audioPreviewUrl && (
-                <div className="rounded-xl border border-zinc-200 bg-zinc-50/50 p-3 dark:border-zinc-800 dark:bg-zinc-900/50">
-                  <AudioPlayer
-                    src={itemData.audioPreviewUrl}
-                    initialDuration={itemData.audioDuration}
-                  />
-                </div>
-              )}
+                {/* Personal or Team Assignment */}
+                {myTeams && myTeams.length > 0 && (
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
+                      Assign To
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={!selectedTeamId ? "default" : "outline"}
+                        onClick={() => setSelectedTeamId(null)}
+                        className={`text-xs rounded-xl h-8 cursor-pointer ${!selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
+                          }`}
+                      >
+                        👤 Personal
+                      </Button>
 
-              {/* Title input */}
-              <FormField
-                control={form.control}
-                name="title"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Title</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder="Give your thought a short title..."
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+                      <div className="flex-1">
+                        <select
+                          value={selectedTeamId || ""}
+                          onChange={(e) =>
+                            setSelectedTeamId((e.target.value as Id<"teams">) || null)
+                          }
+                          className={`w-full rounded-xl border px-3 py-1.5 text-xs font-medium focus:outline-none cursor-pointer transition-colors ${selectedTeamId
+                            ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200"
+                            : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#161726] text-zinc-600 dark:text-zinc-400"
+                            }`}
+                        >
+                          <option value="">👥 Select Team (optional)</option>
+                          {myTeams.map((t) => {
+                            if (!t) return null;
+                            return (
+                              <option key={t._id} value={t._id}>
+                                👥 {t.name} ({t.userRole})
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
                 )}
-              />
 
-              {/* Due Date & Time (Reminders only) */}
-              {currentType === "reminder" && (
+                {/* Audio preview player */}
+                {itemData?.audioPreviewUrl && (
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50/50 p-3 dark:border-zinc-800 dark:bg-zinc-900/50">
+                    <AudioPlayer
+                      src={itemData.audioPreviewUrl}
+                      initialDuration={itemData.audioDuration}
+                    />
+                  </div>
+                )}
+
+                {/* Title input */}
                 <FormField
                   control={form.control}
-                  name="dueDateString"
+                  name="title"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Date & Time</FormLabel>
+                      <FormLabel>Title</FormLabel>
                       <FormControl>
-                        <DateTimePicker12h
-                          value={field.value || ""}
-                          onChange={(val) => field.onChange(val)}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
-
-              {/* Recurrence Selector (Reminders only) */}
-              {currentType === "reminder" && (
-                <div>
-                  <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                    Repeat
-                  </label>
-                  <RecurrenceSelector
-                    mode={currentRecurrenceMode}
-                    selectedDays={currentRecurrenceDays}
-                    onChangeMode={(mode) => {
-                      setValue("recurrenceMode", mode, { shouldValidate: true });
-                      setValue("isDaily", mode === "daily", { shouldValidate: true });
-                    }}
-                    onChangeDays={(days) => {
-                      setValue("recurrenceDays", days, { shouldValidate: true });
-                    }}
-                  />
-                </div>
-              )}
-
-              {/* Content / Notes field */}
-              {currentType !== "list" && (
-                <FormField
-                  control={form.control}
-                  name="content"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        {currentType === "reminder" ? "Details (optional)" : "Content"}
-                      </FormLabel>
-                      <FormControl>
-                        <Textarea
-                          placeholder="Your complete captured text..."
-                          className="min-h-[100px] resize-none"
+                        <Input
+                          placeholder="Give your thought a short title..."
                           {...field}
                         />
                       </FormControl>
@@ -867,118 +832,183 @@ export function ItemPreviewDialog({
                     </FormItem>
                   )}
                 />
-              )}
 
-              {/* Checklist editor (Lists only) */}
-              {currentType === "list" && (
-                <div className="space-y-3">
-                  <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                    Checklist Items
-                  </label>
+                {/* Due Date & Time (Reminders only) */}
+                {currentType === "reminder" && (
+                  <FormField
+                    control={form.control}
+                    name="dueDateString"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Date & Time</FormLabel>
+                        <FormControl>
+                          <DateTimePicker12h
+                            value={field.value || ""}
+                            onChange={(val) => field.onChange(val)}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
 
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                    {currentChecklist.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white p-2 text-xs shadow-2xs dark:border-zinc-800 dark:bg-zinc-900"
-                      >
-                        <span className="text-zinc-400">☑</span>
-                        <input
-                          type="text"
-                          value={item.text}
-                          onChange={(e) =>
-                            handleUpdateChecklistItem(item.id, e.target.value)
+                {/* Recurrence Selector (Reminders only) */}
+                {currentType === "reminder" && (
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
+                      Repeat
+                    </label>
+                    <RecurrenceSelector
+                      mode={currentRecurrenceMode}
+                      selectedDays={currentRecurrenceDays}
+                      onChangeMode={(mode) => {
+                        setValue("recurrenceMode", mode, { shouldValidate: true });
+                        setValue("isDaily", mode === "daily", { shouldValidate: true });
+                      }}
+                      onChangeDays={(days) => {
+                        setValue("recurrenceDays", days, { shouldValidate: true });
+                      }}
+                    />
+                  </div>
+                )}
+
+                {/* Content / Notes field */}
+                {currentType !== "list" && (
+                  <FormField
+                    control={form.control}
+                    name="content"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          {currentType === "reminder" ? "Details (optional)" : "Content"}
+                        </FormLabel>
+                        <FormControl>
+                          <Textarea
+                            placeholder="Your complete captured text..."
+                            className="min-h-[100px] resize-none"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+
+                {/* Checklist editor (Lists only) */}
+                {currentType === "list" && (
+                  <div className="space-y-3">
+                    <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                      Checklist Items
+                    </label>
+
+                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                      {currentChecklist.map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white p-2 text-xs shadow-2xs dark:border-zinc-800 dark:bg-zinc-900"
+                        >
+                          <span className="text-zinc-400">☑</span>
+                          <input
+                            type="text"
+                            value={item.text}
+                            onChange={(e) =>
+                              handleUpdateChecklistItem(item.id, e.target.value)
+                            }
+                            className="flex-1 bg-transparent focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveChecklistItem(item.id)}
+                            className="text-zinc-400 hover:text-rose-500"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Add an item..."
+                        value={newChecklistText}
+                        onChange={(e) => setNewChecklistText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleAddChecklistItem();
                           }
-                          className="flex-1 bg-transparent focus:outline-none"
-                        />
+                        }}
+                        className="h-8 text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleAddChecklistItem}
+                      >
+                        Add
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tags Section */}
+                <div>
+                  <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
+                    Tags
+                  </label>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {currentTags.map((t) => (
+                      <span
+                        key={t}
+                        className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                      >
+                        {t}
                         <button
                           type="button"
-                          onClick={() => handleRemoveChecklistItem(item.id)}
+                          onClick={() => handleRemoveTag(t)}
                           className="text-zinc-400 hover:text-rose-500"
                         >
                           ✕
                         </button>
-                      </div>
+                      </span>
                     ))}
-                  </div>
-
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="Add an item..."
-                      value={newChecklistText}
-                      onChange={(e) => setNewChecklistText(e.target.value)}
+                    <input
+                      type="text"
+                      placeholder="#add-tag"
+                      value={newTagInput}
+                      onChange={(e) => setNewTagInput(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
-                          handleAddChecklistItem();
+                          handleAddTag();
                         }
                       }}
-                      className="h-8 text-xs"
+                      className="h-7 w-24 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-2 text-xs text-zinc-800 focus:border-indigo-600 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
                     />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handleAddChecklistItem}
-                    >
-                      Add
-                    </Button>
                   </div>
-                </div>
-              )}
-
-              {/* Tags Section */}
-              <div>
-                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                  Tags
-                </label>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {currentTags.map((t) => (
-                    <span
-                      key={t}
-                      className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-                    >
-                      {t}
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveTag(t)}
-                        className="text-zinc-400 hover:text-rose-500"
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  ))}
-                  <input
-                    type="text"
-                    placeholder="#add-tag"
-                    value={newTagInput}
-                    onChange={(e) => setNewTagInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleAddTag();
-                      }
-                    }}
-                    className="h-7 w-24 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-2 text-xs text-zinc-800 focus:border-indigo-600 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-                  />
                 </div>
               </div>
 
               {/* Single item save footer */}
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={onClose}
-                  disabled={isSaving}
-                >
-                  Cancel
-                </Button>
+              <div className="shrink-0 sticky bottom-0  gap-3 pt-3 mt-3 border-t border-zinc-200/80 dark:border-white/[0.08] bg-white dark:bg-zinc-900">
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={onClose}
+                    disabled={isSaving}
+                  >
+                    Cancel
+                  </Button>
 
-                <Button type="submit" disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save Item"}
-                </Button>
-              </DialogFooter>
+                  <Button type="submit" disabled={isSaving}>
+                    {isSaving ? "Saving..." : "Save Item"}
+                  </Button>
+                </DialogFooter>
+              </div>
             </form>
           </Form>
         </>

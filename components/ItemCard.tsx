@@ -42,6 +42,7 @@ import {
 
 export interface ItemRecord {
   _id: Id<"items">;
+  userId?: Id<"users">;
   type: "note" | "reminder" | "list";
   title: string;
   content: string;
@@ -62,6 +63,7 @@ export interface ItemRecord {
 
 interface ItemCardProps {
   item: ItemRecord;
+  currentUserId?: Id<"users"> | string | null;
   onEdit: (item: ItemRecord) => void;
 }
 
@@ -91,13 +93,39 @@ function formatCreatedDate(timestamp: number): string {
   }
 }
 
-export function ItemCard({ item, onEdit }: ItemCardProps) {
+export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
   const togglePin = useMutation(api.items.togglePin);
   const deleteItem = useMutation(api.items.deleteItem);
   const toggleChecklistItem = useMutation(api.items.toggleChecklistItem);
   const toggleReminderStatus = useMutation(api.items.toggleReminderStatus);
   const snoozeReminder = useMutation(api.items.snoozeReminder);
   const updateItem = useMutation(api.items.update);
+
+  // Team role lookup to verify admin or owner permissions
+  const userTeamRole = useQuery(
+    api.teams.getUserTeamRole,
+    item.teamId && currentUserId
+      ? { teamId: item.teamId, userId: currentUserId as Id<"users"> }
+      : "skip"
+  );
+
+  // Permission enforcement:
+  // Personal reminder: only creator can edit and delete
+  // Team reminder: creator, team admin, and team owner can edit and delete; other members are view-only
+  const isTeamItem = Boolean(item.teamId);
+  const isCreator = Boolean(
+    currentUserId && item.userId && String(item.userId) === String(currentUserId)
+  );
+  const isTeamAdminOrOwner =
+    userTeamRole === "owner" || userTeamRole === "admin";
+
+  const canEdit = !isTeamItem
+    ? (!item.userId || !currentUserId || isCreator)
+    : (isCreator || isTeamAdminOrOwner);
+
+  const canDelete = !isTeamItem
+    ? (!item.userId || !currentUserId || isCreator)
+    : (isCreator || isTeamAdminOrOwner);
 
   const audioUrl = useQuery(
     api.items.getAudioUrl,
@@ -151,10 +179,14 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
   const handleConfirmDelete = async () => {
     setIsDeleting(true);
     try {
-      await deleteItem({ itemId: item._id });
+      await deleteItem({
+        itemId: item._id,
+        userId: currentUserId ? (currentUserId as Id<"users">) : undefined,
+      });
       toast.success("Item deleted");
-    } catch {
-      toast.error("Failed to delete item");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to delete item";
+      toast.error(msg);
     } finally {
       setIsDeleting(false);
     }
@@ -212,11 +244,17 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
   return (
     <div
       className={`group relative flex flex-col justify-between rounded-2xl border transition-all p-4 sm:p-5 shadow-xs hover:shadow-md ${
+        item.teamId ? "ring-1 ring-purple-500/25 dark:ring-purple-500/35 " : ""
+      }${
         item.isPinned
           ? "border-purple-400/80 bg-purple-50/20 dark:border-purple-500/50 dark:bg-[#18192a]"
-          : isOverdue
-            ? "border-rose-300 dark:border-rose-900/60 bg-white dark:bg-[#161726]"
-            : "border-zinc-200/90 dark:border-white/[0.07] bg-white dark:bg-[#151624] hover:border-zinc-300 dark:hover:border-white/[0.14]"
+          : isCompletedReminder
+            ? "border-emerald-600 dark:border-emerald-600 bg-white dark:bg-[#161726]"
+            : isOverdue
+              ? "border-rose-600 dark:border-rose-600 bg-white dark:bg-[#161726]"
+              : item.type === "reminder"
+                ? "border-amber-600 dark:border-amber-600 bg-white dark:bg-[#151624] hover:border-amber-600"
+                : "border-zinc-200/90 dark:border-white/[0.07] bg-white dark:bg-[#151624] hover:border-zinc-300 dark:hover:border-white/[0.14]"
       }`}
     >
       <div>
@@ -244,8 +282,13 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
 
             {/* Team Reminder Badge */}
             {item.teamId && (
-              <span className="inline-flex items-center gap-1 rounded-lg bg-purple-500/15 border border-purple-500/30 px-2 py-0.5 text-[10px] font-semibold text-purple-700 dark:text-purple-300">
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-purple-500/15 border border-purple-500/40 px-2 py-0.5 text-[10px] font-bold text-purple-700 dark:text-purple-300 shadow-2xs">
                 <span>👥</span> Team
+                {item.creatorName && (
+                  <span className="font-normal opacity-85 text-[10px]">
+                    • {item.creatorName}
+                  </span>
+                )}
               </span>
             )}
 
@@ -270,11 +313,10 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
               type="button"
               onClick={handleTogglePin}
               title={item.isPinned ? "Unpin item" : "Pin to top"}
-              className={`rounded-lg p-1.5 transition-colors cursor-pointer ${
-                item.isPinned
-                  ? "text-rose-500 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40"
-                  : "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/[0.04]"
-              }`}
+              className={`rounded-lg p-1.5 transition-colors cursor-pointer ${item.isPinned
+                ? "text-rose-500 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40"
+                : "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/[0.04]"
+                }`}
             >
               <Pin className={`h-3.5 w-3.5 ${item.isPinned ? "fill-current" : ""}`} />
             </button>
@@ -292,73 +334,63 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
 
               {/* 3-Dots Popup Dropdown Menu */}
               {isMenuOpen && (
-                <div className="absolute right-0 top-full z-30 mt-1 w-36 rounded-xl border border-zinc-200/90 bg-white p-1 shadow-lg dark:border-white/[0.08] dark:bg-[#1a1b2d] animate-in fade-in zoom-in-95">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      onEdit(item);
-                    }}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/[0.06] cursor-pointer"
-                  >
-                    <Pencil className="h-3.5 w-3.5 text-zinc-400" />
-                    <span>Edit</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleTogglePin}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/[0.06] cursor-pointer"
-                  >
-                    <Pin className="h-3.5 w-3.5 text-zinc-400" />
-                    <span>{item.isPinned ? "Unpin" : "Pin"}</span>
-                  </button>
-
-                  {item.type === "reminder" && !isCompletedReminder && (
+                <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-xl border border-zinc-200/90 bg-white p-1 shadow-lg dark:border-white/[0.08] dark:bg-[#1a1b2d] animate-in fade-in zoom-in-95">
+                  {canEdit && (
                     <button
                       type="button"
                       onClick={() => {
                         setIsMenuOpen(false);
-                        setIsSnoozeOpen(true);
+                        onEdit(item);
                       }}
                       className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/[0.06] cursor-pointer"
                     >
-                      <Clock className="h-3.5 w-3.5 text-amber-500" />
-                      <span>Snooze</span>
+                      <Pencil className="h-3.5 w-3.5 text-zinc-400" />
+                      <span>Edit</span>
                     </button>
                   )}
 
-                  <div className="my-1 border-t border-zinc-100 dark:border-white/[0.06]" />
+                  {canEdit && canDelete && (
+                    <div className="my-1 border-t border-zinc-100 dark:border-white/[0.06]" />
+                  )}
 
                   {/* Delete trigger inside dropdown */}
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-rose-500" />
-                        <span>Delete</span>
-                      </button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete this item?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          This will permanently delete &ldquo;{item.title}&rdquo;. This action cannot be undone.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={handleConfirmDelete}
-                          className="bg-rose-600 hover:bg-rose-700 text-white"
+                  {canDelete && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
                         >
-                          {isDeleting ? "Deleting..." : "Yes, Delete"}
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
+                          <Trash2 className="h-3.5 w-3.5 text-rose-500" />
+                          <span>Delete</span>
+                        </button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete this item?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This will permanently delete &ldquo;{item.title}&rdquo;. This action cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={handleConfirmDelete}
+                            className="bg-rose-600 hover:bg-rose-700 text-white"
+                          >
+                            {isDeleting ? "Deleting..." : "Yes, Delete"}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+
+                  {!canEdit && !canDelete && (
+                    <div className="px-2.5 py-1.5 text-[11px] text-zinc-400 dark:text-zinc-500 italic flex items-center gap-1.5 select-none">
+                      <span>🔒</span>
+                      <span>View only</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -367,9 +399,8 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
 
         {/* Card Title */}
         <h3
-          className={`mt-3 text-base font-bold tracking-tight text-zinc-900 dark:text-white ${
-            isCompletedReminder ? "line-through text-zinc-400 dark:text-zinc-500" : ""
-          }`}
+          className={`mt-3 text-base font-bold tracking-tight text-zinc-900 dark:text-white ${isCompletedReminder ? "line-through text-zinc-400 dark:text-zinc-500" : ""
+            }`}
         >
           {item.title}
         </h3>
@@ -512,11 +543,10 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
                       className="mt-0.5"
                     />
                     <span
-                      className={`text-xs break-words ${
-                        ci.completed
-                          ? "line-through text-zinc-400 dark:text-zinc-500"
-                          : "text-zinc-800 dark:text-zinc-200"
-                      }`}
+                      className={`text-xs break-words ${ci.completed
+                        ? "line-through text-zinc-400 dark:text-zinc-500"
+                        : "text-zinc-800 dark:text-zinc-200"
+                        }`}
                     >
                       {ci.text}
                     </span>
@@ -620,45 +650,57 @@ export function ItemCard({ item, onEdit }: ItemCardProps) {
             </p>
 
             {/* Edit & Delete Action Buttons (matches Note Card in image) */}
-            <div className="flex items-center gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => onEdit(item)}
-                className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:border-white/[0.08] dark:bg-[#232438] dark:text-zinc-200 dark:hover:bg-[#2d2e47] cursor-pointer transition-colors"
-              >
-                <Pencil className="h-3.5 w-3.5 text-zinc-400" />
-                <span>Edit</span>
-              </button>
-
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
+            {(canEdit || canDelete) && (
+              <div className="flex items-center gap-2 pt-1">
+                {canEdit && (
                   <button
                     type="button"
-                    className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-rose-50 hover:text-rose-600 dark:border-white/[0.08] dark:bg-[#232438] dark:text-zinc-300 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 cursor-pointer transition-colors"
+                    onClick={() => onEdit(item)}
+                    className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:border-white/[0.08] dark:bg-[#232438] dark:text-zinc-200 dark:hover:bg-[#2d2e47] cursor-pointer transition-colors"
                   >
-                    <Trash2 className="h-3.5 w-3.5 text-rose-500" />
-                    <span>Delete</span>
+                    <Pencil className="h-3.5 w-3.5 text-zinc-400" />
+                    <span>Edit</span>
                   </button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Delete this note?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      This will permanently delete &ldquo;{item.title}&rdquo;.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={handleConfirmDelete}
-                      className="bg-rose-600 hover:bg-rose-700 text-white"
-                    >
-                      {isDeleting ? "Deleting..." : "Yes, Delete"}
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            </div>
+                )}
+
+                {canDelete && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-rose-50 hover:text-rose-600 dark:border-white/[0.08] dark:bg-[#232438] dark:text-zinc-300 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 cursor-pointer transition-colors"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-rose-500" />
+                        <span>Delete</span>
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete this note?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This will permanently delete &ldquo;{item.title}&rdquo;.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={handleConfirmDelete}
+                          className="bg-rose-600 hover:bg-rose-700 text-white"
+                        >
+                          {isDeleting ? "Deleting..." : "Yes, Delete"}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
+              </div>
+            )}
+            {!canEdit && !canDelete && (
+              <div className="flex items-center gap-1.5 pt-1 text-[11px] text-zinc-400 dark:text-zinc-500 italic select-none">
+                <span>🔒</span>
+                <span>View only</span>
+              </div>
+            )}
           </div>
         )}
 

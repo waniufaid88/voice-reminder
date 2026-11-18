@@ -151,6 +151,7 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
 
       await updateItem({
         itemId: item._id,
+        userId: userId ?? undefined,
         title: values.title.trim(),
         content: values.content.trim(),
         type: values.type,
@@ -168,8 +169,9 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
 
       toast.success("Item updated successfully!");
       onClose();
-    } catch {
-      toast.error("Failed to update item.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update item.";
+      toast.error(msg);
     } finally {
       setIsSaving(false);
     }
@@ -230,7 +232,7 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
                         setValue("recurrenceDays", natural.recurrenceDays, { shouldValidate: true });
                       }
                     } else {
-                      const defaultTime = formatLocalDatetime(Date.now() + 2 * 60 * 60 * 1000);
+                      const defaultTime = formatLocalDatetime(Date.now());
                       setValue("dueDateString", defaultTime, { shouldValidate: true });
                     }
                   }
@@ -259,11 +261,10 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
                 <button
                   type="button"
                   onClick={() => setSelectedTeamId("personal")}
-                  className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${
-                    selectedTeamId === "personal"
+                  className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${selectedTeamId === "personal"
                       ? "border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 font-semibold"
                       : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-700"
-                  }`}
+                    }`}
                 >
                   👤 Personal
                 </button>
@@ -274,11 +275,10 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
                       key={team._id}
                       type="button"
                       onClick={() => setSelectedTeamId(team._id)}
-                      className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${
-                        selectedTeamId === team._id
+                      className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${selectedTeamId === team._id
                           ? "border-purple-600 bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 font-semibold"
                           : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-700"
-                      }`}
+                        }`}
                     >
                       👥 {team.name}
                     </button>
@@ -338,7 +338,7 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
                 name="dueDateString"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Due Date & 12-Hour Time (AM / PM)</FormLabel>
+                    <FormLabel>Due Date & Time</FormLabel>
                     <FormControl>
                       <DateTimePicker12h
                         value={field.value}

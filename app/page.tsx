@@ -251,7 +251,14 @@ export default function DashboardPage() {
     router.push("/login");
   };
 
-  const userInitial = user?.name?.trim()?.[0]?.toUpperCase() || "R";
+  const userInitial =
+    user?.name
+      ?.trim()
+      .split(/\s+/)
+      .map((word) => word[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "R";
 
   if (authLoading) {
     return (
@@ -428,6 +435,7 @@ export default function DashboardPage() {
                     <ItemCard
                       key={item._id}
                       item={item as ItemRecord}
+                      currentUserId={user?._id}
                       onEdit={setEditingItem}
                     />
                   ))}
@@ -451,6 +459,7 @@ export default function DashboardPage() {
                     <ItemCard
                       key={item._id}
                       item={item as ItemRecord}
+                      currentUserId={user?._id}
                       onEdit={setEditingItem}
                     />
                   ))}
@@ -492,6 +501,7 @@ export default function DashboardPage() {
                     <ItemCard
                       key={item._id}
                       item={item as ItemRecord}
+                      currentUserId={user?._id}
                       onEdit={setEditingItem}
                     />
                   ))}

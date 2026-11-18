@@ -20,6 +20,27 @@ async function getMembership(
 }
 
 /**
+ * Returns the calling user's role in a team ('owner' | 'admin' | 'member' | null).
+ */
+export const getUserTeamRole = query({
+  args: {
+    teamId: v.id("teams"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const membership = await getMembership(ctx, args.teamId, args.userId);
+    if (membership) {
+      return membership.role;
+    }
+    const team = await ctx.db.get(args.teamId);
+    if (team && team.createdById === args.userId) {
+      return "owner" as const;
+    }
+    return null;
+  },
+});
+
+/**
  * Creates a new team and assigns the creator as the Owner.
  */
 export const createTeam = mutation({

@@ -137,12 +137,33 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
       if (!userId) return;
       try {
         let subscription = await registration.pushManager.getSubscription();
+        const expectedAppServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+
+        // Check if existing subscription has matching applicationServerKey to avoid FCM mismatch
+        if (subscription && subscription.options && subscription.options.applicationServerKey) {
+          const existingKey = new Uint8Array(subscription.options.applicationServerKey);
+          let keyMatches = existingKey.length === expectedAppServerKey.length;
+          if (keyMatches) {
+            for (let i = 0; i < existingKey.length; i++) {
+              if (existingKey[i] !== expectedAppServerKey[i]) {
+                keyMatches = false;
+                break;
+              }
+            }
+          }
+          if (!keyMatches) {
+            console.log("[NotificationWatcher] Stale subscription key detected, resubscribing...");
+            try {
+              await subscription.unsubscribe();
+            } catch {}
+            subscription = null;
+          }
+        }
 
         if (!subscription) {
-          const appServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
           subscription = await registration.pushManager.subscribe({
             userVisibleOnly: true,
-            applicationServerKey: appServerKey as unknown as BufferSource,
+            applicationServerKey: expectedAppServerKey as unknown as BufferSource,
           });
         }
 
@@ -150,12 +171,17 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
         const rawP256dh = subscription.getKey ? subscription.getKey("p256dh") : null;
         const rawAuth = subscription.getKey ? subscription.getKey("auth") : null;
 
-        const p256dh = rawP256dh
-          ? btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(rawP256dh))))
-          : subJson.keys?.p256dh;
-        const auth = rawAuth
-          ? btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(rawAuth))))
-          : subJson.keys?.auth;
+        // Prioritize browser's standard base64url keys from subJson.keys to ensure mobile FCM compatibility
+        const p256dh =
+          subJson.keys?.p256dh ||
+          (rawP256dh
+            ? btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(rawP256dh))))
+            : undefined);
+        const auth =
+          subJson.keys?.auth ||
+          (rawAuth
+            ? btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(rawAuth))))
+            : undefined);
 
         if (subJson.endpoint && p256dh && auth) {
           await saveSubscription({
@@ -264,17 +290,23 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
       for (const item of activeReminders) {
         if (!item.dueDate) continue;
 
-        // Trigger if due right now or within the last 10 minutes, and not notified yet
+        // Trigger if due right now or within the last 10 minutes
         const isDue = item.dueDate <= now && item.dueDate >= now - 10 * 60 * 1000;
-        const alreadyAlerted =
-          item.isNotified ||
-          notifiedIdsRef.current.has(item._id) ||
-          (item.lastAlertedAt && now - item.lastAlertedAt < 60000);
+        const alertKey = `${item._id}_${item.dueDate}`;
+        const hasAlertedLocally =
+          notifiedIdsRef.current.has(alertKey) ||
+          (typeof window !== "undefined" &&
+            sessionStorage.getItem(`alerted_${alertKey}`) === "true");
 
-        if (isDue && !alreadyAlerted) {
-          notifiedIdsRef.current.add(item._id);
+        if (isDue && !hasAlertedLocally) {
+          notifiedIdsRef.current.add(alertKey);
+          if (typeof window !== "undefined") {
+            try {
+              sessionStorage.setItem(`alerted_${alertKey}`, "true");
+            } catch {}
+          }
 
-          // Mark notified in database
+          // Mark notified in database so server crons know it was processed
           markNotified({ itemId: item._id });
 
           // Start continuous 15-second alarm sound
@@ -294,27 +326,45 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
             recurrenceMode: item.recurrenceMode,
           });
 
-          // Show browser notification if permission granted
+          // Show browser notification if permission granted (mobile Android Chrome requires ServiceWorker)
           if (
             typeof window !== "undefined" &&
             "Notification" in window &&
             Notification.permission === "granted"
           ) {
-            try {
-              new Notification(`⏰ Reminder: ${item.title}`, {
-                body: item.content || "Your scheduled reminder is due!",
-                icon: "/icon-192.png",
-                badge: "/badge-72.png",
-              });
-            } catch {
-              // Notification fallback for mobile environments using ServiceWorker
-              navigator.serviceWorker?.ready.then((reg) => {
-                reg.showNotification(`⏰ Reminder: ${item.title}`, {
-                  body: item.content || "Your scheduled reminder is due!",
-                  icon: "/icon-192.png",
-                  badge: "/badge-72.png",
+            const notifTitle = item.teamId
+              ? `⏰ [Team] ${item.title}`
+              : `⏰ Reminder: ${item.title}`;
+            const origin = typeof window !== "undefined" ? window.location.origin : "";
+            const notifOptions = {
+              body: item.content || "Your scheduled reminder is due!",
+              icon: origin ? `${origin}/icon-192.png` : "/icon-192.png",
+              badge: origin ? `${origin}/badge-72.png` : "/badge-72.png",
+              tag: `reminder-${item._id}`,
+              renotify: true,
+              requireInteraction: true,
+              silent: false,
+              vibrate: [500, 250, 500, 250, 500, 250, 500],
+              data: {
+                url: "/",
+                itemId: item._id,
+              },
+            };
+
+            if ("serviceWorker" in navigator) {
+              navigator.serviceWorker.ready
+                .then((reg) => {
+                  reg.showNotification(notifTitle, notifOptions);
+                })
+                .catch(() => {
+                  try {
+                    new Notification(notifTitle, notifOptions);
+                  } catch {}
                 });
-              });
+            } else {
+              try {
+                new Notification(notifTitle, notifOptions);
+              } catch {}
             }
           }
         }
@@ -326,6 +376,32 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
 
     return () => clearInterval(interval);
   }, [activeReminders, markNotified, startAlarm]);
+
+  /**
+   * Listen for push events relayed from Service Worker when phone is backgrounded or tab unfocused
+   */
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data?.type === "PUSH_REMINDER_NOTIFICATION") {
+        startAlarm();
+        if (event.data.itemId) {
+          setAlertingItem({
+            _id: event.data.itemId as Id<"items">,
+            title: event.data.title || "Reminder",
+            content: event.data.content || "",
+            isRecurring: false,
+          });
+        }
+      }
+    };
+
+    navigator.serviceWorker.addEventListener("message", handleSwMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", handleSwMessage);
+    };
+  }, [startAlarm]);
 
   /**
    * Action handler: Mark Done / Done for Today

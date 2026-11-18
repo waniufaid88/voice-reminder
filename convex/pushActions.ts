@@ -31,6 +31,12 @@ export const dispatchPushAction = internalAction({
   args: { itemId: v.id("items") },
   handler: async (ctx, args) => {
     try {
+      try {
+        webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+      } catch (e) {
+        console.warn("[pushActions] VAPID details already set or notice:", e);
+      }
+
       const item = await ctx.runQuery(
         internal.notifications.internalGetItemForPush,
         { itemId: args.itemId }
@@ -60,14 +66,25 @@ export const dispatchPushAction = internalAction({
           ? `By ${item.creatorName}: ${item.content || "Team reminder is due!"}`
           : item.content || "Team reminder is due!";
       } else {
-        subscriptions = await ctx.runQuery(
+        const rawSubs = await ctx.runQuery(
           internal.notifications.internalGetSubscriptionsByUser,
           { userId: item.userId }
         );
+        const map = new Map<string, { endpoint: string; p256dh: string; auth: string }>();
+        for (const s of rawSubs) {
+          if (s.endpoint && s.p256dh && s.auth) {
+            map.set(s.endpoint, {
+              endpoint: s.endpoint,
+              p256dh: s.p256dh,
+              auth: s.auth,
+            });
+          }
+        }
+        subscriptions = Array.from(map.values());
       }
 
       if (!subscriptions || subscriptions.length === 0) {
-        console.log(`[pushActions] No push subscriptions for item ${item._id}`);
+        console.log(`[pushActions] No active push subscriptions found for reminder ${item._id}`);
         return;
       }
 
@@ -76,6 +93,9 @@ export const dispatchPushAction = internalAction({
         body: notificationBody,
         itemId: item._id,
         teamId: item.teamId,
+        icon: "/icon-192.png",
+        badge: "/badge-72.png",
+        tag: `reminder-${item._id}`,
         url: "/",
       });
 

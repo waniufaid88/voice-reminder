@@ -192,15 +192,23 @@ export const create = mutation({
     if (
       args.type === "reminder" &&
       args.dueDate &&
-      args.dueDate > now &&
       (args.reminderStatus ?? "pending") === "pending"
     ) {
       try {
-        const scheduledJobId = await ctx.scheduler.runAt(
-          args.dueDate,
-          internal.notifications.triggerScheduledReminder,
-          { itemId }
-        );
+        let scheduledJobId: any = undefined;
+        if (args.dueDate <= now) {
+          scheduledJobId = await ctx.scheduler.runAfter(
+            0,
+            internal.notifications.triggerScheduledReminder,
+            { itemId }
+          );
+        } else {
+          scheduledJobId = await ctx.scheduler.runAt(
+            args.dueDate,
+            internal.notifications.triggerScheduledReminder,
+            { itemId }
+          );
+        }
         await ctx.db.patch(itemId, { scheduledJobId });
       } catch (err) {
         console.error("[items:create] Failed to schedule reminder job:", err);
@@ -214,6 +222,7 @@ export const create = mutation({
 export const update = mutation({
   args: {
     itemId: v.id("items"),
+    userId: v.optional(v.id("users")),
     title: v.optional(v.string()),
     content: v.optional(v.string()),
     type: v.optional(
@@ -245,6 +254,42 @@ export const update = mutation({
     const { itemId, ...fields } = args;
     const existing = await ctx.db.get(itemId);
     if (!existing) throw new Error("Item not found");
+
+    // Permission enforcement:
+    // Personal reminders: only creator can edit
+    // Team reminders: reminder creator, team admin, and team owner can edit
+    if (fields.userId) {
+      if (!existing.teamId) {
+        if (existing.userId !== fields.userId) {
+          throw new Error("Only the creator can edit this personal reminder.");
+        }
+      } else {
+        const isCreator = existing.userId === fields.userId;
+        let isAuthorized = isCreator;
+
+        if (!isAuthorized) {
+          const membership = await ctx.db
+            .query("teamMembers")
+            .withIndex("by_teamId_userId", (q) =>
+              q.eq("teamId", existing.teamId!).eq("userId", fields.userId!)
+            )
+            .first();
+
+          if (membership && (membership.role === "owner" || membership.role === "admin")) {
+            isAuthorized = true;
+          } else {
+            const team = await ctx.db.get(existing.teamId!);
+            if (team && team.createdById === fields.userId) {
+              isAuthorized = true;
+            }
+          }
+        }
+
+        if (!isAuthorized) {
+          throw new Error("Only the reminder creator, team admin, or team owner can edit this reminder.");
+        }
+      }
+    }
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
     if (fields.title !== undefined) updates.title = fields.title.trim() || "Untitled";
@@ -415,7 +460,7 @@ export const toggleReminderStatus = mutation({
     if (item.scheduledJobId) {
       try {
         await ctx.scheduler.cancel(item.scheduledJobId);
-      } catch {}
+      } catch { }
     }
 
     let scheduledJobId: any = undefined;
@@ -450,7 +495,7 @@ export const stopDailyRepeat = mutation({
     if (item.scheduledJobId) {
       try {
         await ctx.scheduler.cancel(item.scheduledJobId);
-      } catch {}
+      } catch { }
     }
 
     await ctx.db.patch(args.itemId, {
@@ -479,7 +524,7 @@ export const snoozeReminder = mutation({
     if (item.scheduledJobId) {
       try {
         await ctx.scheduler.cancel(item.scheduledJobId);
-      } catch {}
+      } catch { }
     }
 
     let scheduledJobId: any = undefined;
@@ -511,21 +556,60 @@ export const markNotified = mutation({
 });
 
 export const deleteItem = mutation({
-  args: { itemId: v.id("items") },
+  args: {
+    itemId: v.id("items"),
+    userId: v.optional(v.id("users")),
+  },
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
-    if (item) {
-      if (item.scheduledJobId) {
-        try {
-          await ctx.scheduler.cancel(item.scheduledJobId);
-        } catch {}
-      }
-      if (item.audioStorageId) {
-        try {
-          await ctx.storage.delete(item.audioStorageId);
-        } catch {
-          // Storage file deletion fallback
+    if (!item) return;
+
+    // Permission enforcement:
+    // Personal reminders: only creator can delete
+    // Team reminders: reminder creator, team admin, and team owner can delete
+    if (args.userId) {
+      if (!item.teamId) {
+        if (item.userId !== args.userId) {
+          throw new Error("Only the creator can delete this personal reminder.");
         }
+      } else {
+        const isCreator = item.userId === args.userId;
+        let isAuthorized = isCreator;
+
+        if (!isAuthorized) {
+          const membership = await ctx.db
+            .query("teamMembers")
+            .withIndex("by_teamId_userId", (q) =>
+              q.eq("teamId", item.teamId!).eq("userId", args.userId!)
+            )
+            .first();
+
+          if (membership && (membership.role === "owner" || membership.role === "admin")) {
+            isAuthorized = true;
+          } else {
+            const team = await ctx.db.get(item.teamId!);
+            if (team && team.createdById === args.userId) {
+              isAuthorized = true;
+            }
+          }
+        }
+
+        if (!isAuthorized) {
+          throw new Error("Only the reminder creator, team admin, or team owner can delete this reminder.");
+        }
+      }
+    }
+
+    if (item.scheduledJobId) {
+      try {
+        await ctx.scheduler.cancel(item.scheduledJobId);
+      } catch { }
+    }
+    if (item.audioStorageId) {
+      try {
+        await ctx.storage.delete(item.audioStorageId);
+      } catch {
+        // Storage file deletion fallback
       }
     }
     await ctx.db.delete(args.itemId);
