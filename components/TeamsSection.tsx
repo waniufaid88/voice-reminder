@@ -427,23 +427,6 @@ export function TeamsSection({
                 {userRole === "member" && <User className="h-3 w-3" />}
                 <span>{userRole.toUpperCase()}</span>
               </span>
-
-              {canManage && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditTeamName(team.name);
-                    setEditTeamDescription(team.description || "");
-                    setEditErrors({});
-                    setIsEditTeamOpen(true);
-                  }}
-                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-purple-300/80 bg-white/80 dark:border-purple-700/60 dark:bg-purple-950/40 px-2 py-1 text-[9px] sm:text-[10px] font-semibold text-purple-700 dark:text-purple-300 hover:bg-white dark:hover:bg-purple-900/60 shadow-2xs transition-all cursor-pointer"
-                  title="Edit team details"
-                >
-                  <Pencil className="h-2.5 w-2.5 sm:h-3 sm:w-3" />
-                  <span>Edit</span>
-                </button>
-              )}
             </div>
           </div>
         </div>
@@ -1068,97 +1051,6 @@ export function TeamsSection({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-
-        {/* Dialog: Edit Team */}
-        <Dialog open={isEditTeamOpen} onOpenChange={setIsEditTeamOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Edit Team Details</DialogTitle>
-              <DialogDescription>
-                Update the name and description for <strong>{team.name}</strong>.
-              </DialogDescription>
-            </DialogHeader>
-
-            <form onSubmit={handleUpdateTeamSubmit} className="space-y-4 py-2">
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                    Team Name *
-                  </label>
-                  <span className={`text-[10px] ${editTeamName.trim().length > 50 || (editTeamName.trim().length > 0 && editTeamName.trim().length <= 2) ? "text-rose-500 font-semibold" : "text-zinc-400"}`}>
-                    {editTeamName.trim().length}/50
-                  </span>
-                </div>
-                <Input
-                  placeholder="e.g. Marketing Team, Family, Study Group"
-                  value={editTeamName}
-                  onChange={(e) => {
-                    setEditTeamName(e.target.value);
-                    if (editErrors.name) setEditErrors((prev) => ({ ...prev, name: undefined }));
-                  }}
-                  className={`text-xs ${editErrors.name ? "border-rose-500 focus-visible:ring-rose-500" : ""}`}
-                  maxLength={50}
-                  autoFocus
-                />
-                <div className="flex justify-between mt-1">
-                  <p className="text-[10px] text-zinc-500">
-                    3–50 characters (greater than 2 characters)
-                  </p>
-                </div>
-                {editErrors.name && (
-                  <p className="text-[11px] text-rose-500 mt-1 font-medium">{editErrors.name}</p>
-                )}
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                    Description (optional)
-                  </label>
-                  <span className={`text-[10px] ${editTeamDescription.length > 200 ? "text-rose-500 font-semibold" : "text-zinc-400"}`}>
-                    {editTeamDescription.length}/200
-                  </span>
-                </div>
-                <Textarea
-                  placeholder="Briefly describe the purpose of this team (0 to 200 characters)..."
-                  value={editTeamDescription}
-                  onChange={(e) => {
-                    setEditTeamDescription(e.target.value);
-                    if (editErrors.description) setEditErrors((prev) => ({ ...prev, description: undefined }));
-                  }}
-                  className={`text-xs h-20 resize-none ${editErrors.description ? "border-rose-500 focus-visible:ring-rose-500" : ""}`}
-                  maxLength={200}
-                />
-                <div className="flex justify-between mt-1">
-                  <p className="text-[10px] text-zinc-500">
-                    Maximum 200 characters
-                  </p>
-                </div>
-                {editErrors.description && (
-                  <p className="text-[11px] text-rose-500 mt-1 font-medium">{editErrors.description}</p>
-                )}
-              </div>
-
-              <DialogFooter className="pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setIsEditTeamOpen(false)}
-                  className="cursor-pointer text-xs"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={isSavingTeam}
-                  className="bg-purple-600 hover:bg-purple-700 text-white cursor-pointer text-xs font-semibold"
-                >
-                  {isSavingTeam ? "Saving..." : "Save Changes"}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
       </div>
     );
   }
