@@ -41,6 +41,32 @@ export const getUserTeamRole = query({
 });
 
 /**
+ * Lightweight query to fetch available team names and IDs for a user.
+ * Efficiently supports 100+ teams by avoiding member/reminder counts.
+ */
+export const getUserTeamsList = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const memberships = await ctx.db
+      .query("teamMembers")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    const teams: Array<{ _id: Id<"teams">; name: string }> = [];
+    for (const m of memberships) {
+      const team = await ctx.db.get(m.teamId);
+      if (team) {
+        teams.push({
+          _id: team._id,
+          name: team.name,
+        });
+      }
+    }
+    return teams.sort((a, b) => a.name.localeCompare(b.name));
+  },
+});
+
+/**
  * Creates a new team and assigns the creator as the Owner.
  */
 export const createTeam = mutation({
@@ -51,14 +77,22 @@ export const createTeam = mutation({
   },
   handler: async (ctx, args) => {
     const trimmedName = args.name.trim();
-    if (trimmedName.length < 2) {
-      throw new Error("Team name must be at least 2 characters long.");
+    if (trimmedName.length <= 2) {
+      throw new Error("Team name must be greater than 2 characters (at least 3 characters).");
+    }
+    if (trimmedName.length > 50) {
+      throw new Error("Team name must not exceed 50 characters.");
+    }
+
+    const trimmedDescription = args.description ? args.description.trim() : undefined;
+    if (trimmedDescription && trimmedDescription.length > 200) {
+      throw new Error("Team description must not exceed 200 characters.");
     }
 
     const now = Date.now();
     const teamId = await ctx.db.insert("teams", {
       name: trimmedName,
-      description: args.description?.trim() || undefined,
+      description: trimmedDescription || undefined,
       createdById: args.userId,
       createdAt: now,
       updatedAt: now,
@@ -218,13 +252,21 @@ export const updateTeam = mutation({
     }
 
     const trimmedName = args.name.trim();
-    if (trimmedName.length < 2) {
-      throw new Error("Team name must be at least 2 characters long.");
+    if (trimmedName.length <= 2) {
+      throw new Error("Team name must be greater than 2 characters (at least 3 characters).");
+    }
+    if (trimmedName.length > 50) {
+      throw new Error("Team name must not exceed 50 characters.");
+    }
+
+    const trimmedDescription = args.description ? args.description.trim() : undefined;
+    if (trimmedDescription && trimmedDescription.length > 200) {
+      throw new Error("Team description must not exceed 200 characters.");
     }
 
     await ctx.db.patch(args.teamId, {
       name: trimmedName,
-      description: args.description?.trim() || undefined,
+      description: trimmedDescription || undefined,
       updatedAt: Date.now(),
     });
 

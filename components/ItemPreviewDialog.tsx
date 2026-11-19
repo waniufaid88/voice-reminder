@@ -61,6 +61,9 @@ export interface StructuredItemData {
   isQuotaExhausted?: boolean;
   items?: StructuredItemData[];
   teamId?: Id<"teams">;
+  teamName?: string;
+  isTeamAmbiguous?: boolean;
+  ambiguousTeams?: Array<{ id: string; name: string }>;
   creatorName?: string;
 }
 
@@ -83,6 +86,8 @@ export function ItemPreviewDialog({
   const [newTagInput, setNewTagInput] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<Id<"teams"> | null>(null);
+  const [isAmbiguous, setIsAmbiguous] = useState(false);
+  const [ambiguousTeamsList, setAmbiguousTeamsList] = useState<Array<{ id: string; name: string }>>([]);
 
   const myTeams = useQuery(
     api.teams.getMyTeams,
@@ -133,8 +138,18 @@ export function ItemPreviewDialog({
     if (!isOpen || !itemData) {
       setMultiReminders([]);
       setIsBatchMode(false);
+      setIsAmbiguous(false);
+      setAmbiguousTeamsList([]);
       return;
     }
+
+    const ambiguous = Boolean(
+      itemData.isTeamAmbiguous &&
+      itemData.ambiguousTeams &&
+      itemData.ambiguousTeams.length > 0
+    );
+    setIsAmbiguous(ambiguous);
+    setAmbiguousTeamsList(itemData.ambiguousTeams || []);
 
     // If multiple reminders were detected
     if (itemData.items && itemData.items.length > 1) {
@@ -226,7 +241,8 @@ export function ItemPreviewDialog({
       checklist: itemData.checklist || [],
       tags: initialTags,
     });
-    setSelectedTeamId(itemData.teamId || null);
+    // Rule: Notes and lists must remain personal
+    setSelectedTeamId(itemType === "reminder" ? (itemData.teamId || null) : null);
   }, [isOpen, itemData, reset]);
 
   // Handlers for Multi-Reminder Mode
@@ -330,6 +346,7 @@ export function ItemPreviewDialog({
           dueDate: finalDueDate ?? null,
           dueDateLocal: r.dueDateLocal,
           teamId: selectedTeamId || undefined,
+          isTeamAmbiguous: false,
         };
       });
       await onSave(finalBatch);
@@ -459,7 +476,9 @@ export function ItemPreviewDialog({
             : undefined,
         checklist: values.type === "list" ? values.checklist : undefined,
         tags: values.tags,
-        teamId: selectedTeamId || undefined,
+        // Rule: Notes and lists must strictly remain personal
+        teamId: values.type === "reminder" ? (selectedTeamId || undefined) : undefined,
+        isTeamAmbiguous: false,
       });
 
       onClose();
@@ -504,6 +523,61 @@ export function ItemPreviewDialog({
             </p>
           </DialogHeader>
 
+          {/* Ambiguity Prompt for Multi Reminders */}
+          {isAmbiguous && ambiguousTeamsList.length > 0 && (
+            <div className="shrink-0 my-2 p-3 rounded-xl border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/40 space-y-2">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900 dark:text-amber-200">
+                <span>⚠️ Ambiguous Team Destination</span>
+              </div>
+              <p className="text-xs text-amber-800 dark:text-amber-300">
+                Multiple teams match your request. Please select which team these reminders are for:
+              </p>
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {ambiguousTeamsList.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedTeamId(t.id as Id<"teams">);
+                      setIsAmbiguous(false);
+                    }}
+                    className={`text-xs px-2.5 py-1 rounded-lg font-semibold cursor-pointer shadow-2xs transition-colors ${
+                      selectedTeamId === t.id
+                        ? "bg-purple-600 text-white"
+                        : "bg-white dark:bg-zinc-800 border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 hover:bg-amber-100"
+                    }`}
+                  >
+                    👥 {t.name}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedTeamId(null);
+                    setIsAmbiguous(false);
+                  }}
+                  className={`text-xs px-2.5 py-1 rounded-lg font-semibold cursor-pointer shadow-2xs transition-colors ${
+                    !selectedTeamId
+                      ? "bg-purple-600 text-white"
+                      : "bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100"
+                  }`}
+                >
+                  👤 Personal
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Detected team badge if auto-detected for multi-reminders */}
+          {!isAmbiguous && selectedTeamId && myTeams && (
+            <div className="shrink-0 my-1 flex items-center gap-1.5 text-xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800/50">
+              <span>🎯 Team destination detected:</span>
+              <span className="font-bold">
+                {myTeams.find((t) => t?._id === selectedTeamId)?.name || "Team"}
+              </span>
+            </div>
+          )}
+
           {/* Team / Personal Assignment for Multi Reminders */}
           {myTeams && myTeams.length > 0 && (
             <div className="shrink-0 my-2.5 flex items-center justify-between gap-3 p-2.5 rounded-xl border border-zinc-200 dark:border-white/[0.08] bg-zinc-50/70 dark:bg-[#161726]">
@@ -515,7 +589,10 @@ export function ItemPreviewDialog({
                   type="button"
                   size="sm"
                   variant={!selectedTeamId ? "default" : "outline"}
-                  onClick={() => setSelectedTeamId(null)}
+                  onClick={() => {
+                    setSelectedTeamId(null);
+                    setIsAmbiguous(false);
+                  }}
                   disabled={isSaving}
                   className={`text-xs rounded-lg h-7 px-2.5 cursor-pointer ${!selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
                     }`}
@@ -524,9 +601,10 @@ export function ItemPreviewDialog({
                 </Button>
                 <select
                   value={selectedTeamId || ""}
-                  onChange={(e) =>
-                    setSelectedTeamId((e.target.value as Id<"teams">) || null)
-                  }
+                  onChange={(e) => {
+                    setSelectedTeamId((e.target.value as Id<"teams">) || null);
+                    setIsAmbiguous(false);
+                  }}
                   disabled={isSaving}
                   className={`rounded-lg border px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer ${selectedTeamId
                     ? "border-purple-600 bg-purple-50 text-purple-900 dark:bg-purple-950/60 dark:text-purple-200"
@@ -736,7 +814,11 @@ export function ItemPreviewDialog({
                       type="button"
                       variant={currentType === "note" ? "default" : "secondary"}
                       className={`flex-1 ${currentType === "note" ? "bg-indigo-600 text-white" : ""}`}
-                      onClick={() => setValue("type", "note", { shouldValidate: true })}
+                      onClick={() => {
+                        setValue("type", "note", { shouldValidate: true });
+                        setSelectedTeamId(null);
+                        setIsAmbiguous(false);
+                      }}
                     >
                       📝 Note
                     </Button>
@@ -754,52 +836,119 @@ export function ItemPreviewDialog({
                       type="button"
                       variant={currentType === "list" ? "default" : "secondary"}
                       className={`flex-1 ${currentType === "list" ? "bg-emerald-600 text-white" : ""}`}
-                      onClick={() => setValue("type", "list", { shouldValidate: true })}
+                      onClick={() => {
+                        setValue("type", "list", { shouldValidate: true });
+                        setSelectedTeamId(null);
+                        setIsAmbiguous(false);
+                      }}
                     >
                       ☑️ List
                     </Button>
                   </div>
                 </div>
 
-                {/* Personal or Team Assignment */}
-                {myTeams && myTeams.length > 0 && (
-                  <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
-                      Assign To
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={!selectedTeamId ? "default" : "outline"}
-                        onClick={() => setSelectedTeamId(null)}
-                        className={`text-xs rounded-xl h-8 cursor-pointer ${!selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
-                          }`}
-                      >
-                        👤 Personal
-                      </Button>
-
-                      <div className="flex-1">
-                        <select
-                          value={selectedTeamId || ""}
-                          onChange={(e) =>
-                            setSelectedTeamId((e.target.value as Id<"teams">) || null)
-                          }
-                          className={`w-full rounded-xl border px-3 py-1.5 text-xs font-medium focus:outline-none cursor-pointer transition-colors ${selectedTeamId
-                            ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200"
-                            : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#161726] text-zinc-600 dark:text-zinc-400"
+                {/* Personal or Team Assignment (Reminders only; Notes/Lists are strictly personal) */}
+                {currentType === "reminder" && myTeams && myTeams.length > 0 && (
+                  <div className="space-y-2">
+                    {/* Ambiguity resolution banner if multiple teams match */}
+                    {isAmbiguous && ambiguousTeamsList.length > 0 && (
+                      <div className="p-3 rounded-xl border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/40 space-y-2">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900 dark:text-amber-200">
+                          <span>⚠️ Ambiguous Team Destination</span>
+                        </div>
+                        <p className="text-xs text-amber-800 dark:text-amber-300">
+                          Multiple teams match your request. Please select which team this reminder is for:
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                          {ambiguousTeamsList.map((t) => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedTeamId(t.id as Id<"teams">);
+                                setIsAmbiguous(false);
+                              }}
+                              className={`text-xs px-2.5 py-1 rounded-lg font-semibold cursor-pointer shadow-2xs transition-colors ${
+                                selectedTeamId === t.id
+                                  ? "bg-purple-600 text-white"
+                                  : "bg-white dark:bg-zinc-800 border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 hover:bg-amber-100"
+                              }`}
+                            >
+                              👥 {t.name}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTeamId(null);
+                              setIsAmbiguous(false);
+                            }}
+                            className={`text-xs px-2.5 py-1 rounded-lg font-semibold cursor-pointer shadow-2xs transition-colors ${
+                              !selectedTeamId
+                                ? "bg-purple-600 text-white"
+                                : "bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100"
                             }`}
+                          >
+                            👤 Personal
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Detected destination team pill */}
+                    {!isAmbiguous && selectedTeamId && (
+                      <div className="flex items-center gap-1.5 text-xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800/50">
+                        <span>🎯 Team destination detected:</span>
+                        <span className="font-bold">
+                          {myTeams.find((t) => t?._id === selectedTeamId)?.name || "Team"}
+                        </span>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
+                        Assign To
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={!selectedTeamId ? "default" : "outline"}
+                          onClick={() => {
+                            setSelectedTeamId(null);
+                            setIsAmbiguous(false);
+                          }}
+                          className={`text-xs rounded-xl h-8 cursor-pointer ${
+                            !selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
+                          }`}
                         >
-                          <option value="">👥 Select Team (optional)</option>
-                          {myTeams.map((t) => {
-                            if (!t) return null;
-                            return (
-                              <option key={t._id} value={t._id}>
-                                👥 {t.name} ({t.userRole})
-                              </option>
-                            );
-                          })}
-                        </select>
+                          👤 Personal
+                        </Button>
+
+                        <div className="flex-1">
+                          <select
+                            value={selectedTeamId || ""}
+                            onChange={(e) => {
+                              setSelectedTeamId((e.target.value as Id<"teams">) || null);
+                              setIsAmbiguous(false);
+                            }}
+                            className={`w-full rounded-xl border px-3 py-1.5 text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
+                              selectedTeamId
+                                ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200"
+                                : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#161726] text-zinc-600 dark:text-zinc-400"
+                            }`}
+                          >
+                            <option value="">👥 Select Team (optional)</option>
+                            {myTeams.map((t) => {
+                              if (!t) return null;
+                              return (
+                                <option key={t._id} value={t._id}>
+                                  👥 {t.name} ({t.userRole})
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
                       </div>
                     </div>
                   </div>

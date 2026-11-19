@@ -20,21 +20,15 @@ import {
   X,
   ExternalLink,
   Calendar,
-  Mic,
-  Square,
-  RotateCcw,
   UserPlus,
+  Pencil,
 } from "lucide-react";
 
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { ItemRecord } from "./ItemCard";
 import { TabBasedReminderDashboard } from "./TabBasedReminderDashboard";
-import { DateTimePicker12h } from "./DateTimePicker12h";
-import { RecurrenceSelector } from "./RecurrenceSelector";
-import { AudioPlayer } from "./AudioPlayer";
-import { formatLocalDatetime, parseLocalDatetime } from "@/lib/date-utils";
-import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import { teamSchema } from "@/lib/validations/team";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -100,6 +94,10 @@ export function TeamsSection({
   const [editTeamDescription, setEditTeamDescription] = useState("");
   const [isSavingTeam, setIsSavingTeam] = useState(false);
 
+  // Validation error states for Team create and edit
+  const [createErrors, setCreateErrors] = useState<{ name?: string; description?: string }>({});
+  const [editErrors, setEditErrors] = useState<{ name?: string; description?: string }>({});
+
   const [memberToRemove, setMemberToRemove] = useState<{
     userId: Id<"users">;
     name: string;
@@ -107,32 +105,8 @@ export function TeamsSection({
   const [isLeavingTeam, setIsLeavingTeam] = useState(false);
   const [isDeletingTeam, setIsDeletingTeam] = useState(false);
 
-  // Add Team Reminder Dialog state (supports separate Voice and Text options)
-  const [isAddReminderOpen, setIsAddReminderOpen] = useState(false);
-  const [reminderType, setReminderType] = useState<"text" | "voice">("text");
-  const [reminderTitle, setReminderTitle] = useState("");
-  const [reminderContent, setReminderContent] = useState("");
-  const [reminderDueDateString, setReminderDueDateString] = useState("");
-  const [reminderRecurrenceMode, setReminderRecurrenceMode] = useState<"once" | "daily" | "custom">("once");
-  const [reminderRecurrenceDays, setReminderRecurrenceDays] = useState<number[]>([new Date().getDay()]);
-  const [isSavingReminder, setIsSavingReminder] = useState(false);
-
-  // Voice recording state for Team Voice Reminders
-  const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
-  const [recordedAudioDuration, setRecordedAudioDuration] = useState<number>(0);
-  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-
   // Email tracking for instant WhatsApp/Email sharing
   const [lastInvitedEmail, setLastInvitedEmail] = useState("");
-
-  const {
-    isRecording,
-    formattedTime,
-    startRecording,
-    stopRecording,
-    cancelRecording,
-  } = useVoiceRecorder();
 
   // Sync browser history state for Android hardware back button
   useEffect(() => {
@@ -148,74 +122,6 @@ export function TeamsSection({
     };
   }, [selectedTeamId]);
 
-  const handleOpenAddReminder = (type: "text" | "voice" = "text") => {
-    // Automatically show the current time instead of two hours ahead
-    const defaultTime = formatLocalDatetime(Date.now());
-    setReminderDueDateString(defaultTime);
-    setReminderTitle("");
-    setReminderContent("");
-    setReminderType(type);
-    setReminderRecurrenceMode("once");
-    setReminderRecurrenceDays([new Date().getDay()]);
-    setRecordedAudioBlob(null);
-    setRecordedAudioDuration(0);
-    setRecordedAudioUrl(null);
-    setIsAddReminderOpen(true);
-  };
-
-  const handleStopVoiceRecording = async () => {
-    setIsTranscribing(true);
-    try {
-      const result = await stopRecording();
-      if (!result || result.blob.size === 0) {
-        setIsTranscribing(false);
-        return;
-      }
-      setRecordedAudioBlob(result.blob);
-      setRecordedAudioDuration(result.duration);
-      setRecordedAudioUrl(result.url);
-
-      // Transcribe via /api/ai/process
-      const formData = new FormData();
-      const rawMime = (result.blob.type || "").toLowerCase();
-      let filename = "voice-recording.webm";
-      let cleanType = "audio/webm";
-      if (rawMime.includes("mp4") || rawMime.includes("m4a")) {
-        filename = "voice-recording.mp4";
-        cleanType = "audio/mp4";
-      } else if (rawMime.includes("wav")) {
-        filename = "voice-recording.wav";
-        cleanType = "audio/wav";
-      }
-      const sanitizedBlob = new Blob([result.blob], { type: cleanType });
-      formData.append("audio", sanitizedBlob, filename);
-      formData.append("fallbackText", (result.browserTranscript || "").trim());
-      formData.append("clientTimezone", Intl.DateTimeFormat().resolvedOptions().timeZone);
-
-      const resp = await fetch("/api/ai/process", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (resp.ok) {
-        const json = await resp.json();
-        if (json.data) {
-          if (json.data.title) setReminderTitle(json.data.title);
-          if (json.data.content) setReminderContent(json.data.content);
-          if (json.data.dueDateLocal) setReminderDueDateString(json.data.dueDateLocal);
-          if (json.data.recurrenceMode) setReminderRecurrenceMode(json.data.recurrenceMode);
-        }
-      } else if (result.browserTranscript?.trim()) {
-        setReminderTitle(result.browserTranscript.trim());
-      }
-    } catch (err) {
-      console.warn("Voice transcription fallback:", err);
-      toast("Voice recorded! You can adjust title and time.");
-    } finally {
-      setIsTranscribing(false);
-    }
-  };
-
   // Convex Queries
   const myTeams = useQuery(api.teams.getMyTeams, { userId });
   const pendingUserInvites = useQuery(api.teams.getPendingInvitationsForUser, {
@@ -227,9 +133,16 @@ export function TeamsSection({
     selectedTeamId ? { teamId: selectedTeamId, userId } : "skip"
   );
 
+  // Keep edit fields accurately in sync with active team details
+  useEffect(() => {
+    if (teamDetails?.team) {
+      setEditTeamName(teamDetails.team.name);
+      setEditTeamDescription(teamDetails.team.description || "");
+      setEditErrors({});
+    }
+  }, [teamDetails?.team?._id, teamDetails?.team?.name, teamDetails?.team?.description]);
+
   // Convex Mutations
-  const createItem = useMutation(api.items.create);
-  const generateUploadUrl = useMutation(api.items.generateUploadUrl);
   const createTeam = useMutation(api.teams.createTeam);
   const updateTeam = useMutation(api.teams.updateTeam);
   const deleteTeam = useMutation(api.teams.deleteTeam);
@@ -242,92 +155,54 @@ export function TeamsSection({
   const removeMember = useMutation(api.teams.removeMember);
 
   // Handlers
+
   const handleCreateTeamSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTeamName.trim()) {
-      toast.error("Please enter a team name");
+    setCreateErrors({});
+
+    const validation = teamSchema.safeParse({
+      name: newTeamName,
+      description: newTeamDescription,
+    });
+
+    if (!validation.success) {
+      const fieldErrors: { name?: string; description?: string } = {};
+      for (const issue of validation.error.issues) {
+        const field = issue.path[0] as "name" | "description";
+        if (field && !fieldErrors[field]) {
+          fieldErrors[field] = issue.message;
+        }
+      }
+      setCreateErrors(fieldErrors);
+      const firstMessage = validation.error.issues[0]?.message || "Invalid team details";
+      toast.error(firstMessage);
       return;
     }
+
     setIsCreatingTeam(true);
     try {
       const teamId = await createTeam({
         userId,
-        name: newTeamName.trim(),
-        description: newTeamDescription.trim() || undefined,
+        name: validation.data.name,
+        description: validation.data.description || undefined,
       });
+
       toast.success("Team created successfully! 🎉");
+
       setNewTeamName("");
       setNewTeamDescription("");
+      setCreateErrors({});
       setIsCreateTeamOpen(false);
       setSelectedTeamId(teamId);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to create team";
+      const msg =
+        err instanceof Error ? err.message : "Failed to create team";
       toast.error(msg);
     } finally {
       setIsCreatingTeam(false);
     }
   };
 
-  const handleCreateReminderSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!reminderTitle.trim()) {
-      toast.error("Please enter a reminder title");
-      return;
-    }
-    if (!selectedTeamId) return;
-
-    setIsSavingReminder(true);
-    try {
-      let audioStorageId: Id<"_storage"> | undefined = undefined;
-      if (recordedAudioBlob) {
-        try {
-          const postUrl = await generateUploadUrl();
-          const uploadRes = await fetch(postUrl, {
-            method: "POST",
-            headers: { "Content-Type": recordedAudioBlob.type || "audio/webm" },
-            body: recordedAudioBlob,
-          });
-          const uploadJson = await uploadRes.json();
-          audioStorageId = uploadJson.storageId as Id<"_storage">;
-        } catch (uploadErr) {
-          console.error("Audio storage upload failed:", uploadErr);
-        }
-      }
-
-      const dueDate = parseLocalDatetime(reminderDueDateString);
-      await createItem({
-        userId,
-        teamId: selectedTeamId,
-        creatorName: user.name || "Member",
-        type: "reminder",
-        title: reminderTitle.trim(),
-        content: reminderContent.trim(),
-        dueDate,
-        isDaily: reminderRecurrenceMode === "daily",
-        recurrenceMode: reminderRecurrenceMode,
-        recurrenceDays:
-          reminderRecurrenceMode === "custom" ? reminderRecurrenceDays : undefined,
-        tags: ["#team", ...(recordedAudioBlob ? ["#voice"] : [])],
-        audioStorageId,
-        audioDuration: recordedAudioDuration || undefined,
-        reminderStatus: "pending",
-      });
-
-      toast.success(recordedAudioBlob ? "Team voice reminder added! 🎤" : "Team reminder added! ⏰");
-      setIsAddReminderOpen(false);
-      setReminderTitle("");
-      setReminderContent("");
-      setRecordedAudioBlob(null);
-      setRecordedAudioUrl(null);
-      setRecordedAudioDuration(0);
-      onAddTeamReminder?.(selectedTeamId);
-    } catch (err) {
-      console.error("Failed to add team reminder:", err);
-      toast.error("Failed to add team reminder");
-    } finally {
-      setIsSavingReminder(false);
-    }
-  };
 
   const handleInviteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -394,14 +269,35 @@ export function TeamsSection({
 
   const handleUpdateTeamSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTeamId || !editTeamName.trim()) return;
+    if (!selectedTeamId) return;
+    setEditErrors({});
+
+    const validation = teamSchema.safeParse({
+      name: editTeamName,
+      description: editTeamDescription,
+    });
+
+    if (!validation.success) {
+      const fieldErrors: { name?: string; description?: string } = {};
+      for (const issue of validation.error.issues) {
+        const field = issue.path[0] as "name" | "description";
+        if (field && !fieldErrors[field]) {
+          fieldErrors[field] = issue.message;
+        }
+      }
+      setEditErrors(fieldErrors);
+      const firstMessage = validation.error.issues[0]?.message || "Invalid team details";
+      toast.error(firstMessage);
+      return;
+    }
+
     setIsSavingTeam(true);
     try {
       await updateTeam({
         teamId: selectedTeamId,
         userId,
-        name: editTeamName.trim(),
-        description: editTeamDescription.trim() || undefined,
+        name: validation.data.name,
+        description: validation.data.description || undefined,
       });
       toast.success("Team settings saved!");
       setIsEditTeamOpen(false);
@@ -509,57 +405,45 @@ export function TeamsSection({
           </div>
 
           {/* Prominently Highlighted Team Header Card */}
-          <div className="rounded-2xl border-2 border-purple-300/80 dark:border-purple-800/60 bg-gradient-to-r from-purple-100/70 via-indigo-50/50 to-purple-50/70 dark:from-purple-950/40 dark:via-[#161726] dark:to-[#1a1528] p-3 sm:p-4 shadow-xs">
-            <div className="flex flex-row items-center justify-between gap-2 sm:gap-3">
+          <div className="w-full rounded-xl border border-purple-300/80 dark:border-purple-800/60 bg-gradient-to-r from-purple-100/70 via-indigo-50/50 to-purple-50/70 dark:from-purple-950/40 dark:via-[#161726] dark:to-[#1a1528] px-3 py-2 sm:px-4 sm:py-2.5 shadow-xs">
+            <div className="flex min-w-0 items-center gap-2">
               {/* Team Information */}
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-                  <span className="inline-flex items-center gap-1 rounded-md bg-purple-600 text-white px-2 py-0.5 text-[9px] sm:text-[10px] font-bold shadow-2xs">
-                    👥 TEAM
-                  </span>
-                  <h1 className="text-base sm:text-xl font-bold tracking-tight text-zinc-900 dark:text-white truncate min-w-0">
-                    {team.name}
-                  </h1>
-                  <span
-                    className={`inline-flex items-center gap-1 px-1.5 sm:px-2.5 py-0.5 rounded-md text-[9px] sm:text-[11px] font-semibold shrink-0 ${userRole === "owner"
-                      ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300/60"
-                      : userRole === "admin"
-                        ? "bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-300/60"
-                        : "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-300 border border-zinc-300/60"
-                      }`}
-                  >
-                    {userRole === "owner" && <Crown className="h-3 w-3" />}
-                    {userRole === "admin" && <Shield className="h-3 w-3" />}
-                    {userRole === "member" && <User className="h-3 w-3" />}
-                    <span>{userRole.toUpperCase()}</span>
-                  </span>
-                </div>
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-purple-600 px-2 py-1 text-[9px] sm:text-[10px] font-bold leading-none text-white">
+                👥 TEAM
+              </span>
+              <h1 className="min-w-0 flex-1 truncate text-sm sm:text-lg font-bold leading-tight tracking-tight text-zinc-900 dark:text-white">
+                {team.name}
+              </h1>
+              <span
+                className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 sm:px-2 py-1 text-[9px] sm:text-[10px] font-semibold leading-none ${userRole === "owner"
+                  ? "bg-amber-100 text-amber-800 border-amber-300/60 dark:bg-amber-950/60 dark:text-amber-300"
+                  : userRole === "admin"
+                    ? "bg-purple-100 text-purple-800 border-purple-300/60 dark:bg-purple-950/60 dark:text-purple-300"
+                    : "bg-zinc-100 text-zinc-800 border-zinc-300/60 dark:bg-zinc-800 dark:text-zinc-300"
+                  }`}
+              >
+                {userRole === "owner" && <Crown className="h-3 w-3" />}
+                {userRole === "admin" && <Shield className="h-3 w-3" />}
+                {userRole === "member" && <User className="h-3 w-3" />}
+                <span>{userRole.toUpperCase()}</span>
+              </span>
 
-              </div>
-
-              {/* Quick Actions Header Buttons: Separate Voice and Text options */}
-              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 flex-nowrap">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleOpenAddReminder("voice")}
-                  className="flex-none gap-1 text-[10px] sm:text-xs rounded-xl h-8 sm:h-9 border-purple-300 dark:border-purple-700/60 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/50 cursor-pointer font-semibold whitespace-nowrap px-2 sm:px-3 shadow-2xs"
-                  title="Record a voice reminder for this team"
+              {canManage && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditTeamName(team.name);
+                    setEditTeamDescription(team.description || "");
+                    setEditErrors({});
+                    setIsEditTeamOpen(true);
+                  }}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-purple-300/80 bg-white/80 dark:border-purple-700/60 dark:bg-purple-950/40 px-2 py-1 text-[9px] sm:text-[10px] font-semibold text-purple-700 dark:text-purple-300 hover:bg-white dark:hover:bg-purple-900/60 shadow-2xs transition-all cursor-pointer"
+                  title="Edit team details"
                 >
-                  <Mic className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0 text-purple-600 dark:text-purple-400" />
-                  <span>Voice Reminder</span>
-                </Button>
-
-                <Button
-                  size="sm"
-                  onClick={() => handleOpenAddReminder("text")}
-                  className="flex-none gap-1 text-[10px] sm:text-xs bg-purple-600 hover:bg-purple-700 text-white rounded-xl h-8 sm:h-9 shadow-xs cursor-pointer font-semibold whitespace-nowrap px-2 sm:px-3"
-                  title="Create a text reminder for this team"
-                >
-                  <Plus className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" />
-                  <span>Text Reminder</span>
-                </Button>
-              </div>
+                  <Pencil className="h-2.5 w-2.5 sm:h-3 sm:w-3" />
+                  <span>Edit</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -840,40 +724,88 @@ export function TeamsSection({
                   Team Information
                 </h3>
 
-                <form onSubmit={handleUpdateTeamSubmit} className="space-y-3">
+                <form onSubmit={handleUpdateTeamSubmit} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-                      Team Name
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                        Team Name *
+                      </label>
+                      <span className={`text-[10px] ${editTeamName.trim().length > 50 || (editTeamName.trim().length > 0 && editTeamName.trim().length <= 2) ? "text-rose-500 font-semibold" : "text-zinc-400"}`}>
+                        {editTeamName.trim().length}/50
+                      </span>
+                    </div>
                     <Input
-                      value={editTeamName || team.name}
-                      onChange={(e) => setEditTeamName(e.target.value)}
-                      placeholder="e.g. Design Team"
-                      className="text-xs"
-                      required
+                      value={editTeamName}
+                      onChange={(e) => {
+                        setEditTeamName(e.target.value);
+                        if (editErrors.name) setEditErrors((prev) => ({ ...prev, name: undefined }));
+                      }}
+                      placeholder="e.g. Design Team (3 to 50 characters)"
+                      className={`text-xs ${editErrors.name ? "border-rose-500 focus-visible:ring-rose-500" : ""}`}
+                      maxLength={50}
                     />
+                    <div className="flex justify-between mt-1">
+                      <p className="text-[10px] text-zinc-500">
+                        3–50 characters (greater than 2 characters)
+                      </p>
+                    </div>
+                    {editErrors.name && (
+                      <p className="text-[11px] text-rose-500 mt-1 font-medium">{editErrors.name}</p>
+                    )}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-                      Description (optional)
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                        Description (optional)
+                      </label>
+                      <span className={`text-[10px] ${editTeamDescription.length > 200 ? "text-rose-500 font-semibold" : "text-zinc-400"}`}>
+                        {editTeamDescription.length}/200
+                      </span>
+                    </div>
                     <Textarea
-                      value={editTeamDescription !== "" ? editTeamDescription : (team.description || "")}
-                      onChange={(e) => setEditTeamDescription(e.target.value)}
-                      placeholder="What is this team working on?"
-                      className="text-xs h-20"
+                      value={editTeamDescription}
+                      onChange={(e) => {
+                        setEditTeamDescription(e.target.value);
+                        if (editErrors.description) setEditErrors((prev) => ({ ...prev, description: undefined }));
+                      }}
+                      placeholder="What is this team working on? (0 to 200 characters)"
+                      className={`text-xs h-20 resize-none ${editErrors.description ? "border-rose-500 focus-visible:ring-rose-500" : ""}`}
+                      maxLength={200}
                     />
+                    <div className="flex justify-between mt-1">
+                      <p className="text-[10px] text-zinc-500">
+                        Maximum 200 characters
+                      </p>
+                    </div>
+                    {editErrors.description && (
+                      <p className="text-[11px] text-rose-500 mt-1 font-medium">{editErrors.description}</p>
+                    )}
                   </div>
 
-                  <Button
-                    type="submit"
-                    size="sm"
-                    disabled={isSavingTeam}
-                    className="bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-xl cursor-pointer"
-                  >
-                    {isSavingTeam ? "Saving..." : "Save Changes"}
-                  </Button>
+                  <div className="flex items-center gap-2 pt-1">
+                    <Button
+                      type="submit"
+                      size="sm"
+                      disabled={isSavingTeam}
+                      className="bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-xl cursor-pointer"
+                    >
+                      {isSavingTeam ? "Saving..." : "Save Changes"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setEditTeamName(team.name);
+                        setEditTeamDescription(team.description || "");
+                        setEditErrors({});
+                      }}
+                      className="text-xs rounded-xl cursor-pointer"
+                    >
+                      Reset
+                    </Button>
+                  </div>
                 </form>
               </div>
             )}
@@ -1137,202 +1069,91 @@ export function TeamsSection({
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* Dialog: Add Team Reminder (Separate Voice and Text options) */}
-        <Dialog open={isAddReminderOpen} onOpenChange={setIsAddReminderOpen}>
-          <DialogContent className="w-[95vw] sm:max-w-md max-h-[90vh] overflow-y-auto">
+        {/* Dialog: Edit Team */}
+        <Dialog open={isEditTeamOpen} onOpenChange={setIsEditTeamOpen}>
+          <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-base font-bold">
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-purple-600 text-white text-xs">
-                  {reminderType === "voice" ? "🎤" : "⏰"}
-                </span>
-                <span>
-                  {reminderType === "voice" ? "Add Team Voice Reminder" : "Add Team Text Reminder"}
-                </span>
-              </DialogTitle>
-              <DialogDescription className="text-xs">
-                This reminder will be shared with all members of <strong>{team.name}</strong>.
+              <DialogTitle>Edit Team Details</DialogTitle>
+              <DialogDescription>
+                Update the name and description for <strong>{team.name}</strong>.
               </DialogDescription>
             </DialogHeader>
 
-            {/* Type Selector: Text vs Voice */}
-            <div className="flex rounded-xl bg-zinc-100 p-1 dark:bg-[#161726] border border-zinc-200/80 dark:border-white/[0.08]">
-              <button
-                type="button"
-                onClick={() => setReminderType("text")}
-                className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${reminderType === "text"
-                  ? "bg-white text-purple-700 shadow-2xs dark:bg-[#202135] dark:text-purple-300"
-                  : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-                  }`}
-              >
-                <span>📝 Text Reminder</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setReminderType("voice")}
-                className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${reminderType === "voice"
-                  ? "bg-white text-purple-700 shadow-2xs dark:bg-[#202135] dark:text-purple-300"
-                  : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-                  }`}
-              >
-                <Mic className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
-                <span>🎤 Voice Reminder</span>
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateReminderSubmit} className="space-y-4 py-1">
-              {/* Voice Recorder Component (shown in voice mode) */}
-              {reminderType === "voice" && (
-                <div className="rounded-2xl border-2 border-purple-200/90 dark:border-purple-900/50 bg-purple-50/30 dark:bg-purple-950/20 p-4 space-y-3">
-                  {isRecording ? (
-                    <div className="flex flex-col items-center justify-center py-3 space-y-3">
-                      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500 text-white shadow-lg shadow-rose-500/40 animate-pulse">
-                        <Mic className="h-6 w-6" />
-                      </div>
-                      <div className="text-center">
-                        <span className="font-mono text-base font-bold text-rose-600 dark:text-rose-400">
-                          {formattedTime}
-                        </span>
-                        <p className="text-[11px] text-zinc-500 mt-0.5">Recording team voice reminder... Speak clearly</p>
-                      </div>
-                      <div className="flex items-center gap-2 pt-1">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={cancelRecording}
-                          className="rounded-xl text-xs h-8"
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={handleStopVoiceRecording}
-                          className="rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold px-3.5 h-8 gap-1.5"
-                        >
-                          <Square className="h-3 w-3 fill-current" />
-                          <span>Done Speaking</span>
-                        </Button>
-                      </div>
-                    </div>
-                  ) : recordedAudioUrl ? (
-                    <div className="space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
-                          <span>🎤 Voice Note Attached</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRecordedAudioBlob(null);
-                            setRecordedAudioUrl(null);
-                            setRecordedAudioDuration(0);
-                          }}
-                          className="text-xs text-zinc-400 hover:text-rose-600 flex items-center gap-1 cursor-pointer"
-                        >
-                          <RotateCcw className="h-3 w-3" />
-                          <span>Re-record</span>
-                        </button>
-                      </div>
-                      <AudioPlayer src={recordedAudioUrl} initialDuration={recordedAudioDuration} />
-                      {isTranscribing && (
-                        <p className="text-xs text-purple-600 dark:text-purple-400 animate-pulse flex items-center gap-1">
-                          <span>Transcribing voice audio & extracting details...</span>
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center py-3 space-y-2.5 text-center">
-                      <button
-                        type="button"
-                        onClick={startRecording}
-                        className="flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-600/30 hover:scale-105 active:scale-95 transition-all cursor-pointer"
-                        title="Start voice recording"
-                      >
-                        <Mic className="h-6 w-6" />
-                      </button>
-                      <div>
-                        <p className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
-                          Tap mic to record voice reminder
-                        </p>
-                        <p className="text-[11px] text-zinc-500 mt-0.5">
-                          Say e.g. &quot;Submit project report tomorrow at 11am&quot;
-                        </p>
-                      </div>
-                    </div>
-                  )}
+            <form onSubmit={handleUpdateTeamSubmit} className="space-y-4 py-2">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Team Name *
+                  </label>
+                  <span className={`text-[10px] ${editTeamName.trim().length > 50 || (editTeamName.trim().length > 0 && editTeamName.trim().length <= 2) ? "text-rose-500 font-semibold" : "text-zinc-400"}`}>
+                    {editTeamName.trim().length}/50
+                  </span>
                 </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-                  Reminder Title *
-                </label>
                 <Input
-                  required
-                  placeholder={
-                    reminderType === "voice"
-                      ? "e.g. Discuss Q3 roadmap (or speak above)"
-                      : "e.g. Sprint Planning, Project Review, Pay Utility Bill"
-                  }
-                  value={reminderTitle}
-                  onChange={(e) => setReminderTitle(e.target.value)}
-                  className="text-xs"
-                  autoFocus={reminderType === "text"}
+                  placeholder="e.g. Marketing Team, Family, Study Group"
+                  value={editTeamName}
+                  onChange={(e) => {
+                    setEditTeamName(e.target.value);
+                    if (editErrors.name) setEditErrors((prev) => ({ ...prev, name: undefined }));
+                  }}
+                  className={`text-xs ${editErrors.name ? "border-rose-500 focus-visible:ring-rose-500" : ""}`}
+                  maxLength={50}
+                  autoFocus
                 />
+                <div className="flex justify-between mt-1">
+                  <p className="text-[10px] text-zinc-500">
+                    3–50 characters (greater than 2 characters)
+                  </p>
+                </div>
+                {editErrors.name && (
+                  <p className="text-[11px] text-rose-500 mt-1 font-medium">{editErrors.name}</p>
+                )}
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-                  Details / Content (optional)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Description (optional)
+                  </label>
+                  <span className={`text-[10px] ${editTeamDescription.length > 200 ? "text-rose-500 font-semibold" : "text-zinc-400"}`}>
+                    {editTeamDescription.length}/200
+                  </span>
+                </div>
                 <Textarea
-                  placeholder="Add extra context, notes, or links for the team..."
-                  value={reminderContent}
-                  onChange={(e) => setReminderContent(e.target.value)}
-                  className="text-xs h-20"
+                  placeholder="Briefly describe the purpose of this team (0 to 200 characters)..."
+                  value={editTeamDescription}
+                  onChange={(e) => {
+                    setEditTeamDescription(e.target.value);
+                    if (editErrors.description) setEditErrors((prev) => ({ ...prev, description: undefined }));
+                  }}
+                  className={`text-xs h-20 resize-none ${editErrors.description ? "border-rose-500 focus-visible:ring-rose-500" : ""}`}
+                  maxLength={200}
                 />
+                <div className="flex justify-between mt-1">
+                  <p className="text-[10px] text-zinc-500">
+                    Maximum 200 characters
+                  </p>
+                </div>
+                {editErrors.description && (
+                  <p className="text-[11px] text-rose-500 mt-1 font-medium">{editErrors.description}</p>
+                )}
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-                  Due Date & Time
-                </label>
-                <DateTimePicker12h
-                  value={reminderDueDateString}
-                  onChange={setReminderDueDateString}
-                />
-              </div>
-
-              <RecurrenceSelector
-                mode={reminderRecurrenceMode}
-                selectedDays={reminderRecurrenceDays}
-                onChangeMode={setReminderRecurrenceMode}
-                onChangeDays={setReminderRecurrenceDays}
-              />
-
-              <DialogFooter className="pt-2 gap-2 sm:gap-0">
+              <DialogFooter className="pt-2">
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => {
-                    if (isRecording) cancelRecording();
-                    setIsAddReminderOpen(false);
-                  }}
+                  onClick={() => setIsEditTeamOpen(false)}
                   className="cursor-pointer text-xs"
                 >
                   Cancel
                 </Button>
                 <Button
                   type="submit"
-                  disabled={isSavingReminder || !reminderTitle.trim() || isRecording}
+                  disabled={isSavingTeam}
                   className="bg-purple-600 hover:bg-purple-700 text-white cursor-pointer text-xs font-semibold"
                 >
-                  {isSavingReminder
-                    ? "Adding..."
-                    : reminderType === "voice"
-                      ? "Add Voice Reminder"
-                      : "Add Reminder"}
+                  {isSavingTeam ? "Saving..." : "Save Changes"}
                 </Button>
               </DialogFooter>
             </form>
@@ -1516,46 +1337,84 @@ export function TeamsSection({
             </DialogDescription>
           </DialogHeader>
 
+
           <form onSubmit={handleCreateTeamSubmit} className="space-y-4 py-2">
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-                Team Name *
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                  Team Name *
+                </label>
+                <span className={`text-[10px] ${newTeamName.trim().length > 50 || (newTeamName.trim().length > 0 && newTeamName.trim().length <= 2) ? "text-rose-500 font-semibold" : "text-zinc-400"}`}>
+                  {newTeamName.trim().length}/50
+                </span>
+              </div>
               <Input
-                required
                 placeholder="e.g. Marketing Team, Family, Study Group"
                 value={newTeamName}
-                onChange={(e) => setNewTeamName(e.target.value)}
-                className="text-xs"
+                onChange={(e) => {
+                  setNewTeamName(e.target.value);
+                  if (createErrors.name) setCreateErrors((prev) => ({ ...prev, name: undefined }));
+                }}
+                className={`text-xs ${createErrors.name ? "border-rose-500 focus-visible:ring-rose-500" : ""}`}
+                maxLength={50}
                 autoFocus
               />
+              <div className="flex justify-between mt-1">
+                <p className="text-[10px] text-zinc-500">
+                  3–50 characters (greater than 2 characters)
+                </p>
+              </div>
+              {createErrors.name && (
+                <p className="text-[11px] text-rose-500 mt-1 font-medium">{createErrors.name}</p>
+              )}
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-                Description (optional)
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                  Description (optional)
+                </label>
+                <span className={`text-[10px] ${newTeamDescription.length > 200 ? "text-rose-500 font-semibold" : "text-zinc-400"}`}>
+                  {newTeamDescription.length}/200
+                </span>
+              </div>
               <Textarea
-                placeholder="Briefly describe the purpose of this team..."
+                maxLength={200}
+                placeholder="Briefly describe the purpose of this team (0 to 200 characters)..."
                 value={newTeamDescription}
-                onChange={(e) => setNewTeamDescription(e.target.value)}
-                className="text-xs h-20"
+                onChange={(e) => {
+                  setNewTeamDescription(e.target.value);
+                  if (createErrors.description) setCreateErrors((prev) => ({ ...prev, description: undefined }));
+                }}
+                className={`text-xs h-20 resize-none ${createErrors.description ? "border-rose-500 focus-visible:ring-rose-500" : ""}`}
               />
+              <div className="flex justify-between mt-1">
+                <p className="text-[10px] text-zinc-500">
+                  Maximum 200 characters
+                </p>
+              </div>
+              {createErrors.description && (
+                <p className="text-[11px] text-rose-500 mt-1 font-medium">{createErrors.description}</p>
+              )}
             </div>
 
             <DialogFooter className="pt-2">
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setIsCreateTeamOpen(false)}
-                className="cursor-pointer"
+                onClick={() => {
+                  setIsCreateTeamOpen(false);
+                  setCreateErrors({});
+                }}
+                className="cursor-pointer text-xs"
               >
                 Cancel
               </Button>
+
               <Button
                 type="submit"
                 disabled={isCreatingTeam}
-                className="bg-purple-600 hover:bg-purple-700 text-white cursor-pointer"
+                className="bg-purple-600 hover:bg-purple-700 text-white cursor-pointer text-xs font-semibold"
               >
                 {isCreatingTeam ? "Creating..." : "Create Team"}
               </Button>

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
+import { useQuery } from "convex/react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import toast from "react-hot-toast";
@@ -11,6 +12,8 @@ import { WaveformVisualizer } from "./WaveformVisualizer";
 import { ItemPreviewDialog, StructuredItemData } from "./ItemPreviewDialog";
 import { Button } from "@/components/ui/button";
 import { Id } from "@/convex/_generated/dataModel";
+import { api } from "@/convex/_generated/api";
+import { matchTeamDestination, cleanTeamDestinationText } from "@/lib/team-matcher";
 
 import {
   parseNaturalReminder,
@@ -88,6 +91,9 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
     useState<StructuredItemData | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
+  // Scalable user teams query for fast voice/text team destination matching
+  const userTeams = useQuery(api.teams.getUserTeamsList, userId ? { userId } : "skip");
+
   const {
     register,
     handleSubmit,
@@ -145,19 +151,31 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
     if (!isExplicitListRequest(text)) {
       const multi = parseMultipleReminders(text, new Date(), offset);
       if (multi && multi.length > 1) {
+        const teamsList = userTeams?.map((t) => ({ id: t._id, name: t.name })) || [];
+        const matchResult = matchTeamDestination(text, teamsList);
+        const teamId = matchResult.teamId ? (matchResult.teamId as Id<"teams">) : undefined;
+        const teamName = matchResult.teamName || undefined;
+        const isTeamAmbiguous = matchResult.isAmbiguous;
+        const ambiguousTeams = matchResult.ambiguousTeams;
+
         const items: StructuredItemData[] = multi.map((m) => {
           const isDaily = m.recurrenceMode === "daily";
+          const itemTitle = teamName ? cleanTeamDestinationText(m.title || "Reminder", teamName) : (m.title || "Reminder");
           return {
             type: "reminder",
-            title: m.title || "Reminder",
+            title: itemTitle,
             content: cleanReminderContent(
-              m.title + (m.dueDateLocal ? ` scheduled for ${m.dueDateLocal}` : "")
+              itemTitle + (m.dueDateLocal ? ` scheduled for ${m.dueDateLocal}` : "")
             ),
             dueDate: m.dueDate,
             dueDateLocal: m.dueDateLocal,
             recurrenceMode: m.recurrenceMode || "once",
             recurrenceDays: m.recurrenceDays,
             isDaily,
+            teamId,
+            teamName,
+            isTeamAmbiguous,
+            ambiguousTeams,
             ...(audioData || {}),
             tags: audioData
               ? ["#reminder", "#voice"]
@@ -174,6 +192,10 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
           recurrenceMode: items[0].recurrenceMode,
           recurrenceDays: items[0].recurrenceDays,
           isDaily: items[0].isDaily,
+          teamId,
+          teamName,
+          isTeamAmbiguous,
+          ambiguousTeams,
           ...(audioData || {}),
           tags: audioData ? ["#reminder", "#voice"] : ["#reminder"],
           items,
@@ -189,9 +211,18 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
 
     // Reminder intent takes priority.
     if (natural.isReminder) {
+      const teamsList = userTeams?.map((t) => ({ id: t._id, name: t.name })) || [];
+      const matchResult = matchTeamDestination(text, teamsList);
+      const teamId = matchResult.teamId ? (matchResult.teamId as Id<"teams">) : undefined;
+      const teamName = matchResult.teamName || undefined;
+      const isTeamAmbiguous = matchResult.isAmbiguous;
+      const ambiguousTeams = matchResult.ambiguousTeams;
+
+      const finalTitle = teamName ? cleanTeamDestinationText(natural.title, teamName) : natural.title;
+
       return {
         type: "reminder",
-        title: natural.title,
+        title: finalTitle,
         content:
           cleanReminderContent(text) ||
           (audioData
@@ -202,6 +233,10 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
         recurrenceMode: natural.recurrenceMode || "once",
         recurrenceDays: natural.recurrenceDays,
         isDaily: natural.recurrenceMode === "daily",
+        teamId,
+        teamName,
+        isTeamAmbiguous,
+        ambiguousTeams,
         ...(audioData || {}),
         tags: audioData
           ? ["#reminder", "#voice"]
@@ -210,6 +245,7 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
     }
 
     // Only explicit shopping/checklist intent creates a list.
+    // Notes and lists MUST remain personal - never have team functionality.
     if (isExplicitListRequest(text)) {
       const listInfo = generateSmartListInfo(text);
 
@@ -218,6 +254,10 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
         title: listInfo.title,
         content: listInfo.content,
         checklist: listInfo.checklist,
+        teamId: undefined,
+        teamName: undefined,
+        isTeamAmbiguous: false,
+        ambiguousTeams: undefined,
         ...(audioData || {}),
         tags: audioData
           ? ["#list", "#voice"]
@@ -225,13 +265,17 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
       };
     }
 
-    // Everything else remains a note.
+    // Everything else remains a personal note.
     const noteInfo = generateSmartNoteInfo(text);
 
     return {
       type: "note",
       title: noteInfo.title,
       content: noteInfo.content,
+      teamId: undefined,
+      teamName: undefined,
+      isTeamAmbiguous: false,
+      ambiguousTeams: undefined,
       ...(audioData || {}),
       tags: audioData
         ? ["#note", "#voice"]
@@ -258,10 +302,18 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
     if (data.items && data.items.length > 1) {
       const itemsWithAudio = data.items.map((it) => ({
         ...it,
+        teamId: it.teamId || data.teamId,
+        teamName: it.teamName || data.teamName,
+        isTeamAmbiguous: it.isTeamAmbiguous ?? data.isTeamAmbiguous,
+        ambiguousTeams: it.ambiguousTeams ?? data.ambiguousTeams,
         ...(audioData || {}),
       }));
       return {
         ...data,
+        teamId: data.teamId,
+        teamName: data.teamName,
+        isTeamAmbiguous: data.isTeamAmbiguous,
+        ambiguousTeams: data.ambiguousTeams,
         ...(audioData || {}),
         items: itemsWithAudio,
       };
@@ -272,6 +324,17 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
       data.type === "list" ||
       !isExplicitListRequest(text)
     ) {
+      // Notes and lists MUST remain personal
+      if (data.type === "note" || data.type === "list") {
+        return {
+          ...data,
+          teamId: undefined,
+          teamName: undefined,
+          isTeamAmbiguous: false,
+          ambiguousTeams: undefined,
+          ...(audioData || {}),
+        };
+      }
       return {
         ...data,
         ...(audioData || {}),
@@ -286,6 +349,10 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
       title: listInfo.title,
       content: listInfo.content,
       checklist: listInfo.checklist,
+      teamId: undefined,
+      teamName: undefined,
+      isTeamAmbiguous: false,
+      ambiguousTeams: undefined,
       ...(audioData || {}),
       tags: audioData
         ? ["#list", "#voice"]
@@ -309,6 +376,8 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
       const clientNowISO = new Date().toISOString();
       const clientNowLocal = new Date().toString();
 
+      const teamsPayload = userTeams?.map((t) => ({ id: t._id, name: t.name })) || [];
+
       const res = await fetch("/api/ai/process", {
         method: "POST",
         headers: {
@@ -316,6 +385,8 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
         },
         body: JSON.stringify({
           text: values.text,
+          userId: userId || undefined,
+          teams: teamsPayload,
           clientTimezone,
           clientTimezoneOffset,
           clientNowISO,
@@ -433,6 +504,15 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
         "clientNowLocal",
         new Date().toString()
       );
+
+      if (userId) {
+        formData.append("userId", userId);
+      }
+
+      const teamsPayload = userTeams?.map((t) => ({ id: t._id, name: t.name })) || [];
+      if (teamsPayload.length > 0) {
+        formData.append("teams", JSON.stringify(teamsPayload));
+      }
 
       const res = await fetch("/api/ai/process", {
         method: "POST",

@@ -11,6 +11,14 @@ import {
 } from "@/lib/natural-date-parser";
 
 import { parseLocalDatetime } from "@/lib/date-utils";
+import { convexServer } from "@/lib/convex-server";
+import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
+import {
+  matchTeamDestination,
+  cleanTeamDestinationText,
+  TeamInfo,
+} from "@/lib/team-matcher";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1";
 const GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3-turbo";
@@ -36,6 +44,10 @@ type FormattedItem = {
   isDaily: boolean;
   checklist?: ChecklistItem[];
   tags: string[];
+  teamId?: string | null;
+  teamName?: string | null;
+  isTeamAmbiguous?: boolean;
+  ambiguousTeams?: TeamInfo[];
 };
 
 function getGroqMimeAndExt(
@@ -271,7 +283,8 @@ function formatRuleBasedReminders(
 function parseTextRuleBased(
   rawText: string,
   refDate: Date = new Date(),
-  clientTimezoneOffset?: number
+  clientTimezoneOffset?: number,
+  userTeams: TeamInfo[] = []
 ) {
   const natural = parseNaturalReminder(
     rawText,
@@ -289,6 +302,22 @@ function parseTextRuleBased(
 
   // Reminder priority.
   if (reminderIntent) {
+    let teamId: string | null = null;
+    let teamName: string | null = null;
+    let isTeamAmbiguous = false;
+    let ambiguousTeams: TeamInfo[] = [];
+
+    if (userTeams.length > 0) {
+      const match = matchTeamDestination(rawText, userTeams);
+      if (match.teamId) {
+        teamId = match.teamId;
+        teamName = match.teamName;
+      } else if (match.isAmbiguous) {
+        isTeamAmbiguous = true;
+        ambiguousTeams = match.ambiguousTeams;
+      }
+    }
+
     const multiple = formatRuleBasedReminders(
       rawText,
       refDate,
@@ -296,18 +325,30 @@ function parseTextRuleBased(
     );
 
     if (multiple.length > 1) {
+      const multiWithTeam = multiple.map((it) => ({
+        ...it,
+        teamId,
+        teamName,
+        isTeamAmbiguous,
+        ambiguousTeams,
+      }));
+
       return {
         type: "reminder" as const,
-        title: multiple[0].title,
+        title: multiWithTeam[0].title,
         content: cleanReminderContent(rawText),
-        dueDate: multiple[0].dueDate,
-        dueDateLocal: multiple[0].dueDateLocal,
-        recurrenceMode: multiple[0].recurrenceMode,
-        recurrenceDays: multiple[0].recurrenceDays,
+        dueDate: multiWithTeam[0].dueDate,
+        dueDateLocal: multiWithTeam[0].dueDateLocal,
+        recurrenceMode: multiWithTeam[0].recurrenceMode,
+        recurrenceDays: multiWithTeam[0].recurrenceDays,
         isDaily: false,
         checklist: undefined,
         tags: ["#reminder"],
-        items: multiple,
+        teamId,
+        teamName,
+        isTeamAmbiguous,
+        ambiguousTeams,
+        items: multiWithTeam,
       };
     }
 
@@ -325,6 +366,10 @@ function parseTextRuleBased(
         "#reminder",
         natural.recurrenceMode === "daily" ? "#daily" : "#task",
       ],
+      teamId,
+      teamName,
+      isTeamAmbiguous,
+      ambiguousTeams,
     };
 
     return {
@@ -400,6 +445,9 @@ export async function POST(req: NextRequest) {
   let usedGroqTranscription = false;
   let usedGroqStructuring = false;
 
+  let userTeams: TeamInfo[] = [];
+  let userIdRaw: string | undefined;
+
   try {
     // STEP 1: Get text from audio or direct text input.
 
@@ -412,6 +460,17 @@ export async function POST(req: NextRequest) {
       clientTimezone = (formData.get("clientTimezone") as string) || "";
       clientNowISO = (formData.get("clientNowISO") as string) || "";
       clientNowLocal = (formData.get("clientNowLocal") as string) || "";
+      userIdRaw = (formData.get("userId") as string) || undefined;
+
+      const teamsRaw = formData.get("teams") as string | null;
+      if (teamsRaw) {
+        try {
+          const parsed = JSON.parse(teamsRaw);
+          if (Array.isArray(parsed)) {
+            userTeams = parsed;
+          }
+        } catch {}
+      }
 
       const offsetRaw = formData.get("clientTimezoneOffset");
 
@@ -538,6 +597,15 @@ export async function POST(req: NextRequest) {
       clientTimezone = json.clientTimezone || "";
       clientNowISO = json.clientNowISO || "";
       clientNowLocal = json.clientNowLocal || "";
+      userIdRaw = json.userId || undefined;
+
+      if (Array.isArray(json.teams)) {
+        userTeams = json.teams;
+      } else if (typeof json.teams === "string") {
+        try {
+          userTeams = JSON.parse(json.teams);
+        } catch {}
+      }
 
       if (
         json.clientTimezoneOffset !== undefined &&
@@ -548,6 +616,20 @@ export async function POST(req: NextRequest) {
         if (Number.isFinite(offset)) {
           clientTimezoneOffset = offset;
         }
+      }
+    }
+
+    // Fallback: If teams weren't in the request payload but userId is available, fetch from Convex
+    if (userTeams.length === 0 && userIdRaw) {
+      try {
+        const dbTeams = await convexServer.query(api.teams.getUserTeamsList, {
+          userId: userIdRaw as Id<"users">,
+        });
+        if (dbTeams && dbTeams.length > 0) {
+          userTeams = dbTeams.map((t) => ({ id: String(t._id), name: t.name }));
+        }
+      } catch (err) {
+        console.warn("[AI] Could not fetch teams for user:", err);
       }
     }
 
@@ -935,7 +1017,38 @@ Lists:
 - Individual items go in checklist.
 
 ====================================
-8. OUTPUT
+8. TEAM DESTINATION FOR REMINDERS
+====================================
+
+${
+  userTeams.length > 0
+    ? `The user belongs to the following available teams:
+${JSON.stringify(userTeams.map((t) => ({ id: t.id, name: t.name })))}
+
+Rules for Team Selection:
+1. ONLY apply team destination if the item is classified as a "reminder".
+   Notes and lists are strictly personal: for notes and lists, ALWAYS return "teamId": null, "teamName": null, "isTeamAmbiguous": false, "ambiguousTeamIds": [].
+2. If the user mentions one of the available teams as the destination or target of the reminder (e.g. "in <team>", "for <team>", "<team>: ...", "remind <team> to...", "remind me in <team> to...", "remind me to ... for team <team>"):
+   - If the mention clearly matches exactly ONE team from the list:
+     Set "teamId" to that team's id.
+     Set "teamName" to that team's exact name.
+     Set "isTeamAmbiguous" to false.
+     Set "ambiguousTeamIds" to [].
+     Clean the reminder title so it doesn't redundantly repeat the team destination phrase (e.g. "Remind Office to submit quarterly report" -> title: "Submit quarterly report", teamId: "<Office_id>").
+   - If the mention is ambiguous between multiple available teams (for example, the user mentions "Office" and they belong to both "Office Marketing" and "Office Engineering"):
+     Set "teamId": null.
+     Set "teamName": the mentioned name.
+     Set "isTeamAmbiguous": true.
+     Set "ambiguousTeamIds": the ids of all matching candidate teams.
+3. If the user does NOT mention an existing team name:
+   Set "teamId": null, "teamName": null, "isTeamAmbiguous": false, "ambiguousTeamIds": [].
+   This creates a personal reminder as usual.
+4. Team names can be anything (e.g., "Friends", "Family", "Office", "ABC", etc.). They do NOT need to contain "Team" or "Group".`
+    : `The user currently has no teams. Always set "teamId": null, "teamName": null, "isTeamAmbiguous": false, "ambiguousTeamIds": [].`
+}
+
+====================================
+9. OUTPUT
 ====================================
 
 Respond ONLY with valid JSON.
@@ -951,6 +1064,10 @@ Use exactly this structure:
   "recurrenceDays": null,
   "checklist": [],
   "tags": ["#note", "#voice"],
+  "teamId": null,
+  "teamName": null,
+  "isTeamAmbiguous": false,
+  "ambiguousTeamIds": [],
   "items": [
     {
       "type": "note",
@@ -960,7 +1077,11 @@ Use exactly this structure:
       "recurrenceMode": "once",
       "recurrenceDays": null,
       "checklist": [],
-      "tags": ["#note", "#voice"]
+      "tags": ["#note", "#voice"],
+      "teamId": null,
+      "teamName": null,
+      "isTeamAmbiguous": false,
+      "ambiguousTeamIds": []
     }
   ]
 }
@@ -1028,6 +1149,51 @@ For a single item, items must contain exactly one item.
           let formattedItems: FormattedItem[] = [];
 
           if (reminderIntent) {
+            // Team resolution for reminders
+            let detectedTeamId: string | null = null;
+            let detectedTeamName: string | null = null;
+            let isTeamAmbiguous = false;
+            let ambiguousTeams: TeamInfo[] = [];
+
+            if (userTeams.length > 0) {
+              if (parsed.isTeamAmbiguous) {
+                isTeamAmbiguous = true;
+                if (Array.isArray(parsed.ambiguousTeamIds)) {
+                  ambiguousTeams = userTeams.filter((t) =>
+                    parsed.ambiguousTeamIds.includes(t.id)
+                  );
+                }
+              } else if (parsed.teamId && userTeams.some((t) => t.id === parsed.teamId)) {
+                detectedTeamId = String(parsed.teamId);
+                detectedTeamName =
+                  userTeams.find((t) => t.id === parsed.teamId)?.name ||
+                  String(parsed.teamName || "");
+              } else if (parsed.teamName) {
+                const matchedByName = userTeams.filter(
+                  (t) => t.name.toLowerCase() === String(parsed.teamName).toLowerCase()
+                );
+                if (matchedByName.length === 1) {
+                  detectedTeamId = matchedByName[0].id;
+                  detectedTeamName = matchedByName[0].name;
+                } else if (matchedByName.length > 1) {
+                  isTeamAmbiguous = true;
+                  ambiguousTeams = matchedByName;
+                }
+              }
+
+              // Double-check with deterministic matcher as fallback/safety net
+              if (!detectedTeamId && !isTeamAmbiguous) {
+                const match = matchTeamDestination(rawText, userTeams);
+                if (match.teamId) {
+                  detectedTeamId = match.teamId;
+                  detectedTeamName = match.teamName;
+                } else if (match.isAmbiguous) {
+                  isTeamAmbiguous = true;
+                  ambiguousTeams = match.ambiguousTeams;
+                }
+              }
+            }
+
             if (
               Array.isArray(parsed.items) &&
               parsed.items.length > 1
@@ -1056,13 +1222,17 @@ For a single item, items must contain exactly one item.
                       ? item.recurrenceMode
                       : "once") as RecurrenceMode;
 
-                  const title =
+                  let title =
                     typeof item.title === "string" &&
                       item.title.trim()
                       ? item.title.trim()
                       : cleanReminderTitle(
                         String(item.content || "")
                       );
+
+                  if (detectedTeamName) {
+                    title = cleanTeamDestinationText(title, detectedTeamName);
+                  }
 
                   const content =
                     typeof item.content === "string" &&
@@ -1093,6 +1263,10 @@ For a single item, items must contain exactly one item.
                     isDaily: recurrenceMode === "daily",
                     checklist: undefined,
                     tags: ["#reminder", "#task"],
+                    teamId: detectedTeamId,
+                    teamName: detectedTeamName,
+                    isTeamAmbiguous,
+                    ambiguousTeams,
                   };
                 }
               );
@@ -1107,7 +1281,13 @@ For a single item, items must contain exactly one item.
               );
 
               if (ruleItems.length > 1) {
-                formattedItems = ruleItems;
+                formattedItems = ruleItems.map((r) => ({
+                  ...r,
+                  teamId: detectedTeamId,
+                  teamName: detectedTeamName,
+                  isTeamAmbiguous,
+                  ambiguousTeams,
+                }));
               }
             }
           }
@@ -1146,6 +1326,11 @@ For a single item, items must contain exactly one item.
             let recurrenceDays: number[] | undefined;
 
             let finalChecklist: ChecklistItem[] | undefined;
+
+            let detectedTeamId: string | null = null;
+            let detectedTeamName: string | null = null;
+            let isTeamAmbiguous = false;
+            let ambiguousTeams: TeamInfo[] = [];
 
             if (finalType === "reminder") {
               dueDateLocal =
@@ -1191,6 +1376,51 @@ For a single item, items must contain exactly one item.
               )
                 ? parsed.recurrenceDays
                 : natural.recurrenceDays;
+
+              // Team resolution for single reminder
+              if (userTeams.length > 0) {
+                if (parsed.isTeamAmbiguous) {
+                  isTeamAmbiguous = true;
+                  if (Array.isArray(parsed.ambiguousTeamIds)) {
+                    ambiguousTeams = userTeams.filter((t) =>
+                      parsed.ambiguousTeamIds.includes(t.id)
+                    );
+                  }
+                } else if (parsed.teamId && userTeams.some((t) => t.id === parsed.teamId)) {
+                  detectedTeamId = String(parsed.teamId);
+                  detectedTeamName =
+                    userTeams.find((t) => t.id === parsed.teamId)?.name ||
+                    String(parsed.teamName || "");
+                } else if (parsed.teamName) {
+                  const matchedByName = userTeams.filter(
+                    (t) => t.name.toLowerCase() === String(parsed.teamName).toLowerCase()
+                  );
+                  if (matchedByName.length === 1) {
+                    detectedTeamId = matchedByName[0].id;
+                    detectedTeamName = matchedByName[0].name;
+                  } else if (matchedByName.length > 1) {
+                    isTeamAmbiguous = true;
+                    ambiguousTeams = matchedByName;
+                  }
+                }
+
+                if (!detectedTeamId && !isTeamAmbiguous) {
+                  const match = matchTeamDestination(rawText, userTeams);
+                  if (match.teamId) {
+                    detectedTeamId = match.teamId;
+                    detectedTeamName = match.teamName;
+                  } else if (match.isAmbiguous) {
+                    isTeamAmbiguous = true;
+                    ambiguousTeams = match.ambiguousTeams;
+                  }
+                }
+              }
+            } else {
+              // Requirement 7: Notes and lists MUST ALWAYS remain personal!
+              detectedTeamId = null;
+              detectedTeamName = null;
+              isTeamAmbiguous = false;
+              ambiguousTeams = [];
             }
 
             // Generate the correct title and content.
@@ -1201,6 +1431,10 @@ For a single item, items must contain exactly one item.
               ) {
                 finalTitle =
                   natural.title || cleanReminderTitle(rawText);
+              }
+
+              if (detectedTeamName) {
+                finalTitle = cleanTeamDestinationText(finalTitle, detectedTeamName);
               }
 
               if (!finalContent) {
@@ -1306,6 +1540,10 @@ For a single item, items must contain exactly one item.
               isDaily: recurrenceMode === "daily",
               checklist: finalChecklist,
               tags: finalTags,
+              teamId: finalType === "reminder" ? detectedTeamId : null,
+              teamName: finalType === "reminder" ? detectedTeamName : null,
+              isTeamAmbiguous: finalType === "reminder" ? isTeamAmbiguous : false,
+              ambiguousTeams: finalType === "reminder" ? ambiguousTeams : [],
             };
 
             formattedItems = [singleItem];
@@ -1348,6 +1586,11 @@ For a single item, items must contain exactly one item.
                 ? ["#reminder"]
                 : primaryItem.tags,
 
+            teamId: primaryItem.type === "reminder" ? (primaryItem.teamId || null) : null,
+            teamName: primaryItem.type === "reminder" ? (primaryItem.teamName || null) : null,
+            isTeamAmbiguous: primaryItem.type === "reminder" ? Boolean(primaryItem.isTeamAmbiguous) : false,
+            ambiguousTeams: primaryItem.type === "reminder" ? (primaryItem.ambiguousTeams || []) : [],
+
             items: formattedItems,
           });
         }
@@ -1370,8 +1613,20 @@ For a single item, items must contain exactly one item.
     const structured = parseTextRuleBased(
       rawText,
       refDate,
-      clientTimezoneOffset
+      clientTimezoneOffset,
+      userTeams
     );
+
+    return NextResponse.json({
+      success: true,
+      usedGroq: false,
+      usedGroqTranscription,
+      usedGroqStructuring: false,
+      usedOpenAI: false,
+      isQuotaExhausted: false,
+      rawTranscript: rawText,
+      ...structured,
+    });
 
     return NextResponse.json({
       success: true,
