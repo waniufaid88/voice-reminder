@@ -288,7 +288,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
     const checkReminders = () => {
       const now = Date.now();
       for (const item of activeReminders) {
-        if (!item.dueDate) continue;
+        if (!item.dueDate || item.isNotified) continue;
 
         // Trigger if due right now or within the last 10 minutes
         const isDue = item.dueDate <= now && item.dueDate >= now - 10 * 60 * 1000;
@@ -385,6 +385,14 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
 
     const handleSwMessage = (event: MessageEvent) => {
       if (event.data?.type === "PUSH_REMINDER_NOTIFICATION") {
+        const itemId = event.data.itemId;
+        if (itemId) {
+          const pushKey = `${itemId}_push`;
+          if (notifiedIdsRef.current.has(pushKey)) {
+            return;
+          }
+          notifiedIdsRef.current.add(pushKey);
+        }
         startAlarm();
         if (event.data.itemId) {
           setAlertingItem({

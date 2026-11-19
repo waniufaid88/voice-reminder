@@ -18,10 +18,6 @@ import {
   Bell,
   ArrowLeft,
   X,
-  ExternalLink,
-  Calendar,
-  UserPlus,
-  Pencil,
 } from "lucide-react";
 
 import { api } from "@/convex/_generated/api";

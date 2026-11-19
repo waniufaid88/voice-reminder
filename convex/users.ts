@@ -45,3 +45,83 @@ export const create = mutation({
   },
 });
 
+export const generateUploadUrl = mutation({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+export const updateProfile = mutation({
+  args: {
+    userId: v.id("users"),
+    name: v.optional(v.string()),
+    image: v.optional(v.string()),
+    imageStorageId: v.optional(v.id("_storage")),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("User not found");
+
+    const patch: {
+      name?: string;
+      image?: string;
+      imageStorageId?: any;
+    } = {};
+
+    if (args.name !== undefined) {
+      const trimmed = args.name.trim();
+      if (trimmed.length < 2) {
+        throw new Error("Name must be at least 2 characters");
+      }
+      patch.name = trimmed;
+    }
+
+    if (args.imageStorageId !== undefined) {
+      patch.imageStorageId = args.imageStorageId;
+      const url = await ctx.storage.getUrl(args.imageStorageId);
+      if (url) {
+        patch.image = url;
+      }
+    } else if (args.image !== undefined) {
+      patch.image = args.image;
+    }
+
+    await ctx.db.patch(args.userId, patch);
+
+    const updated = await ctx.db.get(args.userId);
+    let finalImage = updated?.image;
+    if (!finalImage && updated?.imageStorageId) {
+      finalImage = (await ctx.storage.getUrl(updated.imageStorageId)) || undefined;
+    }
+
+    return {
+      _id: updated!._id,
+      name: updated!.name,
+      email: updated!.email,
+      image: finalImage,
+    };
+  },
+});
+
+export const getProfile = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+
+    let image = user.image;
+    if (!image && user.imageStorageId) {
+      image = (await ctx.storage.getUrl(user.imageStorageId)) || undefined;
+    }
+
+    return {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      image,
+      createdAt: user.createdAt,
+    };
+  },
+});
+

@@ -38,12 +38,18 @@ export const validateSession = query({
     const user = await ctx.db.get(session.userId);
     if (!user) return null;
 
+    let image = user.image;
+    if (!image && user.imageStorageId) {
+      image = (await ctx.storage.getUrl(user.imageStorageId)) || undefined;
+    }
+
     return {
       session,
       user: {
         _id: user._id,
         name: user.name,
         email: user.email,
+        image,
         createdAt: user.createdAt,
       },
     };

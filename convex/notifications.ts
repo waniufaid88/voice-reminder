@@ -178,6 +178,9 @@ export const triggerScheduledReminder = internalMutation({
     if (item.reminderStatus !== "pending") return;
     if (!item.dueDate) return;
 
+    // Prevent duplicate triggers if already alerted
+    if (item.isNotified) return;
+
     // Mark as notified and record timestamp
     await ctx.db.patch(args.itemId, {
       isNotified: true,

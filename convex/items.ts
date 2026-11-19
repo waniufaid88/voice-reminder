@@ -52,6 +52,7 @@ export const listActiveReminders = query({
       (r) =>
         r.teamId === undefined &&
         r.reminderStatus === "pending" &&
+        !r.isNotified &&
         r.dueDate !== undefined
     );
 
@@ -70,7 +71,11 @@ export const listActiveReminders = query({
         .collect();
 
       for (const tr of teamReminders) {
-        if (tr.reminderStatus === "pending" && tr.dueDate !== undefined) {
+        if (
+          tr.reminderStatus === "pending" &&
+          !tr.isNotified &&
+          tr.dueDate !== undefined
+        ) {
           if (!activeList.some((item) => item._id === tr._id)) {
             activeList.push(tr);
           }
@@ -551,7 +556,10 @@ export const snoozeReminder = mutation({
 export const markNotified = mutation({
   args: { itemId: v.id("items") },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.itemId, { isNotified: true });
+    await ctx.db.patch(args.itemId, {
+      isNotified: true,
+      lastAlertedAt: Date.now(),
+    });
   },
 });
 

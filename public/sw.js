@@ -1,5 +1,7 @@
 // Service Worker for VoiceReminder Web Push Notifications & Background Actions
 
+const recentNotifTimestamps = new Map();
+
 self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
@@ -28,6 +30,23 @@ self.addEventListener("push", (event) => {
 
   const origin = self.location.origin || "";
   const itemId = data.itemId || data.data?.itemId;
+
+  // Prevent multiple duplicate alerts for the same reminder within 60 seconds
+  const now = Date.now();
+  if (itemId && recentNotifTimestamps.has(itemId)) {
+    const lastTime = recentNotifTimestamps.get(itemId);
+    if (now - lastTime < 60000) {
+      return;
+    }
+  }
+  if (itemId) {
+    recentNotifTimestamps.set(itemId, now);
+    if (recentNotifTimestamps.size > 100) {
+      const oldestKey = recentNotifTimestamps.keys().next().value;
+      if (oldestKey) recentNotifTimestamps.delete(oldestKey);
+    }
+  }
+
   const tag = itemId ? `reminder-${itemId}` : `reminder-${Date.now()}`;
 
   const iconUrl = origin ? `${origin}/icon-192.png` : "/icon-192.png";

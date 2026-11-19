@@ -1,10 +1,20 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import toast from "react-hot-toast";
-import { LogOut, ChevronDown, ChevronUp, Users } from "lucide-react";
+import {
+  LogOut,
+  ChevronDown,
+  ChevronUp,
+  Users,
+  ChevronRight,
+  Palette,
+  Pencil,
+  Camera,
+  Loader2,
+} from "lucide-react";
 
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -20,6 +30,7 @@ import { TeamsSection } from "@/components/TeamsSection";
 import { MobileBottomNav } from "@/components/MobileBottomNav";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -41,8 +52,20 @@ import {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [user, setUser] = useState<{ _id: string; name: string; email: string } | null>(null);
+  const [user, setUser] = useState<{
+    _id: string;
+    name: string;
+    email: string;
+    image?: string;
+  } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+
+  // Real-time reactive user profile from Convex
+  const userProfile = useQuery(
+    api.users.getProfile,
+    user?._id ? { userId: user._id as Id<"users"> } : "skip"
+  );
+  const activeUser = userProfile || user;
 
   // Filter & Search states
   const [activeTab, setActiveTab] = useState<"all" | "note" | "reminder" | "list" | "teams">("reminder");
@@ -50,8 +73,31 @@ export default function DashboardPage() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<ItemRecord | null>(null);
 
-  // Mobile More Dialog
+  // Account Dialog (Mobile & Desktop)
   const [isMobileMoreOpen, setIsMobileMoreOpen] = useState(false);
+
+  // Edit Profile Dialog state
+  const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
+  const [profileNameInput, setProfileNameInput] = useState("");
+  const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
+  const [profileImageFile, setProfileImageFile] = useState<File | null>(null);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [avatarError, setAvatarError] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setAvatarError(false);
+  }, [activeUser?.image]);
+
+  useEffect(() => {
+    if (isEditProfileOpen && activeUser) {
+      setProfileNameInput(activeUser.name || "");
+      setProfileImagePreview(activeUser.image || null);
+      setProfileImageFile(null);
+      setProfileError(null);
+    }
+  }, [isEditProfileOpen, activeUser]);
 
   // Lists section expansion state (initially 3 lists, Show More / Show Less)
   const [isListsExpanded, setIsListsExpanded] = useState(false);
@@ -79,6 +125,7 @@ export default function DashboardPage() {
   // Convex mutations
   const createItem = useMutation(api.items.create);
   const generateUploadUrl = useMutation(api.items.generateUploadUrl);
+  const updateProfileMutation = useMutation(api.users.updateProfile);
 
   // Authenticate user on mount
   useEffect(() => {
@@ -251,14 +298,105 @@ export default function DashboardPage() {
     router.push("/login");
   };
 
+  const handleProfileFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select a valid image file (PNG, JPG, WebP)");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image file must be smaller than 5MB");
+      return;
+    }
+
+    setProfileImageFile(file);
+    const objectUrl = URL.createObjectURL(file);
+    setProfileImagePreview(objectUrl);
+    setProfileError(null);
+  };
+
+  const handleRemovePhoto = () => {
+    setProfileImageFile(null);
+    setProfileImagePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeUser?._id) return;
+
+    const trimmed = profileNameInput.trim();
+    if (trimmed.length < 2) {
+      setProfileError("Name must be at least 2 characters.");
+      return;
+    }
+    if (trimmed.length > 50) {
+      setProfileError("Name cannot exceed 50 characters.");
+      return;
+    }
+
+    setIsSavingProfile(true);
+    setProfileError(null);
+
+    try {
+      let imageStorageId: Id<"_storage"> | undefined = undefined;
+      let finalImageUrl: string | undefined = undefined;
+
+      if (profileImageFile) {
+        const postUrl = await generateUploadUrl();
+        const res = await fetch(postUrl, {
+          method: "POST",
+          headers: { "Content-Type": profileImageFile.type },
+          body: profileImageFile,
+        });
+        const json = await res.json();
+        imageStorageId = json.storageId as Id<"_storage">;
+      } else if (profileImagePreview === null && activeUser.image) {
+        finalImageUrl = "";
+      }
+
+      const updated = await updateProfileMutation({
+        userId: activeUser._id as Id<"users">,
+        name: trimmed,
+        imageStorageId,
+        image: finalImageUrl,
+      });
+
+      setUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              name: trimmed,
+              image: updated?.image || undefined,
+            }
+          : prev
+      );
+
+      toast.success("Profile updated successfully! ✨");
+      setIsEditProfileOpen(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update profile";
+      setProfileError(msg);
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
   const userInitial =
-    user?.name
+    activeUser?.name
       ?.trim()
       .split(/\s+/)
       .map((word) => word[0])
       .join("")
       .slice(0, 2)
-      .toUpperCase() || "R";
+      .toUpperCase() ||
+    activeUser?.email?.charAt(0).toUpperCase() ||
+    "U";
 
   if (authLoading) {
     return (
@@ -298,54 +436,60 @@ export default function DashboardPage() {
           {/* User profile & actions */}
           <div className="flex items-center gap-2.5 sm:gap-3">
             <ThemeToggle className="hidden md:inline-flex" />
-            {user && (
-              <div className="hidden md:flex flex-col text-right">
-                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                  {user.name}
-                </span>
-                <span className="text-[11px] text-zinc-500 font-mono">
-                  {user.email}
-                </span>
-              </div>
+
+            {/* Desktop: Clickable Profile Pill opens Account Dialog */}
+            {activeUser && (
+              <button
+                type="button"
+                onClick={() => setIsMobileMoreOpen(true)}
+                className="hidden md:flex items-center gap-2.5 rounded-full border border-purple-200/70 dark:border-white/[0.08] bg-purple-50/50 hover:bg-purple-100/60 dark:bg-zinc-900/60 dark:hover:bg-zinc-800/80 py-1 pl-3 pr-1.5 transition-all cursor-pointer text-left shadow-2xs group"
+                title="Open Account details"
+              >
+                <div className="flex flex-col text-right">
+                  <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
+                    {activeUser.name}
+                  </span>
+                  <span className="text-[10px] text-zinc-500 font-mono leading-tight">
+                    {activeUser.email}
+                  </span>
+                </div>
+                <div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-2 ring-purple-500/80 overflow-hidden bg-white dark:bg-[#12131f] shadow-xs group-hover:scale-105 transition-transform">
+                  {activeUser.image && !avatarError ? (
+                    <img
+                      src={activeUser.image}
+                      alt={activeUser.name || "User avatar"}
+                      className="h-full w-full rounded-full object-cover"
+                      onError={() => setAvatarError(true)}
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-extrabold text-xs">
+                      {userInitial}
+                    </div>
+                  )}
+                </div>
+              </button>
             )}
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" size="sm" className="hidden md:inline-flex">
-                  Sign out
-                </Button>
-              </AlertDialogTrigger>
 
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>
-                    Are you sure you want to sign out of this account?
-                  </AlertDialogTitle>
-                  <AlertDialogDescription>
-                    You will be signed out of your session and redirected to the login page.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={handleLogout}
-                    className="bg-rose-600 hover:bg-rose-700 text-white"
-                  >
-                    Yes, Sign out
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-
-            {/* Mobile: userInitial in place of Sign out & theme toggle */}
+            {/* Mobile: Avatar button opens Account Dialog */}
             <button
               type="button"
               onClick={() => setIsMobileMoreOpen(true)}
-              className="md:hidden flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-bold text-xs shadow-sm hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+              className="md:hidden relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-2 ring-purple-500/80 overflow-hidden bg-white dark:bg-[#12131f] shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
               aria-label="Account details"
-              title={user?.name || "Account"}
+              title={activeUser?.name || "Account"}
             >
-              {userInitial}
+              {activeUser?.image && !avatarError ? (
+                <img
+                  src={activeUser.image}
+                  alt={activeUser.name || "User avatar"}
+                  className="h-full w-full rounded-full object-cover"
+                  onError={() => setAvatarError(true)}
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-extrabold text-xs">
+                  {userInitial}
+                </div>
+              )}
             </button>
           </div>
         </div>
@@ -568,87 +712,283 @@ export default function DashboardPage() {
         onClose={() => setEditingItem(null)}
       />
 
-      {/* Mobile More Options Dialog */}
+      {/* Account Dialog (Mobile & Desktop) */}
       <Dialog open={isMobileMoreOpen} onOpenChange={setIsMobileMoreOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Account</DialogTitle>
-            <DialogDescription>
-              Signed in as {user?.email}
+        <DialogContent className="max-w-[360px] sm:max-w-[400px] rounded-[28px] border border-purple-100 dark:border-white/[0.08] bg-white dark:bg-[#12131f] p-5 sm:p-6 shadow-2xl gap-0">
+          <DialogHeader className="pb-4 text-left">
+            <DialogTitle className="text-xl font-extrabold tracking-tight text-zinc-900 dark:text-white">
+              Account
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Manage your profile, teams, appearance, and session
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3 py-2 text-sm">
-            {/* User row */}
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-[#161726] border border-zinc-200 dark:border-white/[0.08]">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-600 text-white font-bold text-sm">
-                {userInitial}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-bold text-zinc-900 dark:text-white truncate">
-                  {user?.name || "User"}
-                </p>
+          <div className="space-y-3.5">
+            {/* Profile Section */}
+            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-purple-50 via-purple-100/70 to-indigo-100/80 dark:from-purple-950/50 dark:via-purple-900/30 dark:to-indigo-950/40 border border-purple-200/60 dark:border-purple-500/20 p-4 shadow-xs">
+              {/* Decorative soft glow swoosh */}
+              <div className="pointer-events-none absolute -right-6 -top-8 h-32 w-32 rounded-full bg-purple-300/30 dark:bg-purple-500/10 blur-xl" />
+
+              <div className="relative flex items-center gap-3.5">
+                {/* Circular Avatar */}
+                <div className="relative flex h-16 w-16 shrink-0 items-center justify-center rounded-full ring-2 ring-purple-500 bg-white dark:bg-[#1a1b2e] shadow-sm overflow-hidden">
+                  {activeUser?.image && !avatarError ? (
+                    <img
+                      src={activeUser.image}
+                      alt={activeUser.name || "User avatar"}
+                      className="h-full w-full rounded-full object-cover"
+                      onError={() => setAvatarError(true)}
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-xl font-black text-white select-none">
+                      {userInitial}
+                    </div>
+                  )}
+                </div>
+
+                {/* Name, Email, and Edit Profile Button */}
+                <div className="min-w-0 flex-1 space-y-1">
+                  <h3 className="truncate text-base font-extrabold text-zinc-900 dark:text-white leading-tight">
+                    {activeUser?.name || "User"}
+                  </h3>
+                  <p className="truncate text-xs text-zinc-600 dark:text-zinc-400 font-medium">
+                    {activeUser?.email}
+                  </p>
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditProfileOpen(true)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-purple-300/80 dark:border-purple-500/30 bg-purple-100/90 dark:bg-purple-500/20 px-3 py-1 text-[11px] font-bold text-purple-700 dark:text-purple-300 hover:bg-purple-200/80 dark:hover:bg-purple-500/30 active:scale-95 transition-all cursor-pointer shadow-2xs"
+                    >
+                      <Pencil className="h-3 w-3" />
+                      <span>Edit Profile</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* Quick Switch to Teams on Mobile */}
+            {/* Account Dialog Options - ONLY THESE THREE: */}
+
+            {/* 1. My Teams */}
             <button
               type="button"
               onClick={() => {
                 setActiveTab("teams");
                 setIsMobileMoreOpen(false);
               }}
-              className="w-full flex items-center justify-between p-3 rounded-xl border border-zinc-200 dark:border-white/[0.08] hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors cursor-pointer"
+              className="w-full flex items-center justify-between rounded-2xl border border-zinc-200/90 dark:border-white/[0.08] bg-white dark:bg-[#161726] px-4 py-3.5 hover:bg-purple-50/50 dark:hover:bg-[#1d1e30] hover:border-purple-200 dark:hover:border-purple-500/30 transition-all cursor-pointer shadow-2xs group"
             >
-              <div className="flex items-center gap-2.5">
-                <Users className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                <span className="font-medium text-zinc-800 dark:text-zinc-200">
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-purple-100 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 group-hover:scale-105 transition-transform">
+                  <Users className="h-4 w-4" />
+                </div>
+                <span className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
                   My Teams
                 </span>
               </div>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 font-bold">
-                {counts.teams || 0}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-purple-100 dark:bg-purple-950/60 px-2 text-xs font-extrabold text-purple-700 dark:text-purple-300">
+                  {counts.teams || 0}
+                </span>
+                <ChevronRight className="h-4 w-4 text-zinc-400 group-hover:translate-x-0.5 transition-transform" />
+              </div>
             </button>
 
-            {/* Theme Toggle with only dark and light icons */}
-            <div className="flex items-center justify-between p-3 rounded-xl border border-zinc-200 dark:border-white/[0.08]">
-              <span className="font-medium text-zinc-700 dark:text-zinc-200">
-                Appearance
-              </span>
+            {/* 2. Appearance */}
+            <div className="flex items-center justify-between rounded-2xl border border-zinc-200/90 dark:border-white/[0.08] bg-white dark:bg-[#161726] px-4 py-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+                  <Palette className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
+                    Appearance
+                  </p>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Light or dark mode
+                  </p>
+                </div>
+              </div>
               <ThemeToggle variant="segmented" />
             </div>
 
-            {/* Sign Out */}
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
+            {/* 3. Sign out */}
+            <div className="pt-1">
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <button
+                    type="button"
+                    className="w-full flex items-center justify-center gap-2 rounded-2xl bg-rose-50 hover:bg-rose-100/90 dark:bg-rose-950/30 dark:hover:bg-rose-950/50 border border-rose-200/60 dark:border-rose-900/40 py-3.5 text-sm font-bold text-rose-600 dark:text-rose-400 active:scale-[0.99] transition-all cursor-pointer shadow-2xs"
+                  >
+                    <LogOut className="h-4 w-4 stroke-[2.25]" />
+                    <span>Sign out</span>
+                  </button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Sign out?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to sign out of your account?
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={handleLogout}
+                      className="bg-rose-600 hover:bg-rose-700 text-white"
+                    >
+                      Yes, Sign out
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Profile Dialog */}
+      <Dialog open={isEditProfileOpen} onOpenChange={setIsEditProfileOpen}>
+        <DialogContent className="max-w-[360px] sm:max-w-[400px] rounded-[28px] border border-purple-100 dark:border-white/[0.08] bg-white dark:bg-[#12131f] p-5 sm:p-6 shadow-2xl">
+          <DialogHeader className="pb-3 text-left">
+            <DialogTitle className="text-lg font-extrabold tracking-tight text-zinc-900 dark:text-white">
+              Edit Profile
+            </DialogTitle>
+            <DialogDescription className="text-xs text-zinc-500 dark:text-zinc-400">
+              Update your profile photo and display name.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSaveProfile} className="space-y-4">
+            {profileError && (
+              <div className="rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/40 p-2.5 text-xs text-rose-600 dark:text-rose-400">
+                {profileError}
+              </div>
+            )}
+
+            {/* Profile Avatar Upload / Preview */}
+            <div className="flex flex-col items-center justify-center gap-3 py-1">
+              <div className="relative group">
+                <div className="relative flex h-20 w-20 items-center justify-center rounded-full ring-3 ring-purple-500/80 p-0.5 bg-white dark:bg-[#1a1b2e] shadow-md overflow-hidden">
+                  {profileImagePreview ? (
+                    <img
+                      src={profileImagePreview}
+                      alt="Avatar preview"
+                      className="h-full w-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-2xl font-black text-white select-none">
+                      {userInitial}
+                    </div>
+                  )}
+                </div>
+
+                {/* Camera overlay button */}
                 <button
                   type="button"
-                  className="w-full flex items-center justify-center gap-2 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 font-semibold text-xs cursor-pointer"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="absolute bottom-0 right-0 flex h-7 w-7 items-center justify-center rounded-full bg-purple-600 text-white shadow-md hover:bg-purple-700 active:scale-95 transition-all cursor-pointer ring-2 ring-white dark:ring-[#12131f]"
+                  title="Upload new picture"
                 >
-                  <LogOut className="h-4 w-4" />
-                  <span>Sign out</span>
+                  <Camera className="h-3.5 w-3.5" />
                 </button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Sign out?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Are you sure you want to sign out of your account?
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={handleLogout}
-                    className="bg-rose-600 hover:bg-rose-700 text-white"
+              </div>
+
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={handleProfileFileSelected}
+                className="hidden"
+              />
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="rounded-full bg-purple-100 hover:bg-purple-200/80 dark:bg-purple-950/60 dark:hover:bg-purple-900/60 px-3 py-1 text-xs font-semibold text-purple-700 dark:text-purple-300 transition-colors cursor-pointer"
+                >
+                  Change Photo
+                </button>
+                {profileImagePreview && (
+                  <button
+                    type="button"
+                    onClick={handleRemovePhoto}
+                    className="rounded-full px-2.5 py-1 text-xs font-medium text-zinc-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 transition-colors cursor-pointer"
                   >
-                    Yes, Sign out
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </div>
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Name Input */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
+                Display Name
+              </label>
+              <Input
+                type="text"
+                value={profileNameInput}
+                onChange={(e) => setProfileNameInput(e.target.value)}
+                placeholder="Your name"
+                maxLength={50}
+                required
+                className="rounded-xl border-zinc-300 dark:border-white/10 dark:bg-[#1a1b2e] focus-visible:border-purple-600 focus-visible:ring-purple-600/20"
+              />
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                Between 2 and 50 characters.
+              </p>
+            </div>
+
+            {/* Email (Read-Only) */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
+                Email Address
+              </label>
+              <Input
+                type="email"
+                value={activeUser?.email || ""}
+                disabled
+                className="rounded-xl border-zinc-200 bg-zinc-100/70 text-zinc-500 dark:border-white/5 dark:bg-white/[0.03] dark:text-zinc-400 cursor-not-allowed"
+              />
+              <p className="text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
+                Email is tied to your account login and cannot be edited.
+              </p>
+            </div>
+
+            {/* Actions */}
+            <div className="pt-2 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsEditProfileOpen(false)}
+                disabled={isSavingProfile}
+                className="rounded-xl"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isSavingProfile}
+                className="rounded-xl bg-purple-600 hover:bg-purple-700 text-white shadow-xs"
+              >
+                {isSavingProfile ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save Changes"
+                )}
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
