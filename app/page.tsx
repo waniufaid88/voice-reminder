@@ -76,11 +76,15 @@ export default function DashboardPage() {
   // Account Dialog (Mobile & Desktop)
   const [isMobileMoreOpen, setIsMobileMoreOpen] = useState(false);
 
+  // Full Profile Image Viewer Dialog (Displays profile image only, no settings)
+  const [isProfileImageViewerOpen, setIsProfileImageViewerOpen] = useState(false);
+
   // Edit Profile Dialog state
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [profileNameInput, setProfileNameInput] = useState("");
   const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
   const [profileImageFile, setProfileImageFile] = useState<File | null>(null);
+  const [isPhotoRemoved, setIsPhotoRemoved] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState(false);
@@ -91,13 +95,14 @@ export default function DashboardPage() {
   }, [activeUser?.image]);
 
   useEffect(() => {
-    if (isEditProfileOpen && activeUser) {
-      setProfileNameInput(activeUser.name || "");
-      setProfileImagePreview(activeUser.image || null);
+    if (isEditProfileOpen) {
+      setProfileNameInput(activeUser?.name || "");
+      setProfileImagePreview(activeUser?.image || null);
       setProfileImageFile(null);
+      setIsPhotoRemoved(false);
       setProfileError(null);
     }
-  }, [isEditProfileOpen, activeUser]);
+  }, [isEditProfileOpen]);
 
   // Lists section expansion state (initially 3 lists, Show More / Show Less)
   const [isListsExpanded, setIsListsExpanded] = useState(false);
@@ -313,6 +318,7 @@ export default function DashboardPage() {
     }
 
     setProfileImageFile(file);
+    setIsPhotoRemoved(false);
     const objectUrl = URL.createObjectURL(file);
     setProfileImagePreview(objectUrl);
     setProfileError(null);
@@ -321,6 +327,8 @@ export default function DashboardPage() {
   const handleRemovePhoto = () => {
     setProfileImageFile(null);
     setProfileImagePreview(null);
+    setIsPhotoRemoved(true);
+
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -356,7 +364,7 @@ export default function DashboardPage() {
         });
         const json = await res.json();
         imageStorageId = json.storageId as Id<"_storage">;
-      } else if (profileImagePreview === null && activeUser.image) {
+      } else if (isPhotoRemoved) {
         finalImageUrl = "";
       }
 
@@ -364,20 +372,25 @@ export default function DashboardPage() {
         userId: activeUser._id as Id<"users">,
         name: trimmed,
         imageStorageId,
-        image: finalImageUrl,
+        image: isPhotoRemoved ? "" : finalImageUrl,
+        removeImage: isPhotoRemoved,
       });
 
       setUser((prev) =>
         prev
           ? {
-              ...prev,
-              name: trimmed,
-              image: updated?.image || undefined,
-            }
+            ...prev,
+            name: trimmed,
+            image: isPhotoRemoved ? undefined : (updated?.image ?? undefined),
+          }
           : prev
       );
 
-      toast.success("Profile updated successfully! ✨");
+      toast.success(
+        isPhotoRemoved
+          ? "Profile picture removed! ✨"
+          : "Profile updated successfully! ✨"
+      );
       setIsEditProfileOpen(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to update profile";
@@ -433,64 +446,33 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* User profile & actions */}
+          {/* User profile picture & actions */}
           <div className="flex items-center gap-2.5 sm:gap-3">
             <ThemeToggle className="hidden md:inline-flex" />
 
-            {/* Desktop: Clickable Profile Pill opens Account Dialog */}
+            {/* Header: Profile picture only. When clicked, display full profile image only */}
             {activeUser && (
               <button
                 type="button"
-                onClick={() => setIsMobileMoreOpen(true)}
-                className="hidden md:flex items-center gap-2.5 rounded-full border border-purple-200/70 dark:border-white/[0.08] bg-purple-50/50 hover:bg-purple-100/60 dark:bg-zinc-900/60 dark:hover:bg-zinc-800/80 py-1 pl-3 pr-1.5 transition-all cursor-pointer text-left shadow-2xs group"
-                title="Open Account details"
+                onClick={() => setIsProfileImageViewerOpen(true)}
+                className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-2 ring-purple-500/80 hover:ring-purple-500 overflow-hidden bg-white dark:bg-[#12131f] shadow-xs hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                aria-label="View Profile Photo"
+                title="View Profile Photo"
               >
-                <div className="flex flex-col text-right">
-                  <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
-                    {activeUser.name}
-                  </span>
-                  <span className="text-[10px] text-zinc-500 font-mono leading-tight">
-                    {activeUser.email}
-                  </span>
-                </div>
-                <div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-2 ring-purple-500/80 overflow-hidden bg-white dark:bg-[#12131f] shadow-xs group-hover:scale-105 transition-transform">
-                  {activeUser.image && !avatarError ? (
-                    <img
-                      src={activeUser.image}
-                      alt={activeUser.name || "User avatar"}
-                      className="h-full w-full rounded-full object-cover"
-                      onError={() => setAvatarError(true)}
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-extrabold text-xs">
-                      {userInitial}
-                    </div>
-                  )}
-                </div>
+                {activeUser.image && !avatarError ? (
+                  <img
+                    src={activeUser.image}
+                    alt={activeUser.name || "User avatar"}
+                    className="h-full w-full rounded-full object-cover"
+                    onError={() => setAvatarError(true)}
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-extrabold text-xs select-none">
+                    {userInitial}
+                  </div>
+                )}
               </button>
             )}
-
-            {/* Mobile: Avatar button opens Account Dialog */}
-            <button
-              type="button"
-              onClick={() => setIsMobileMoreOpen(true)}
-              className="md:hidden relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-2 ring-purple-500/80 overflow-hidden bg-white dark:bg-[#12131f] shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
-              aria-label="Account details"
-              title={activeUser?.name || "Account"}
-            >
-              {activeUser?.image && !avatarError ? (
-                <img
-                  src={activeUser.image}
-                  alt={activeUser.name || "User avatar"}
-                  className="h-full w-full rounded-full object-cover"
-                  onError={() => setAvatarError(true)}
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-extrabold text-xs">
-                  {userInitial}
-                </div>
-              )}
-            </button>
           </div>
         </div>
       </header>
@@ -714,7 +696,7 @@ export default function DashboardPage() {
 
       {/* Account Dialog (Mobile & Desktop) */}
       <Dialog open={isMobileMoreOpen} onOpenChange={setIsMobileMoreOpen}>
-        <DialogContent className="max-w-[360px] sm:max-w-[400px] rounded-[28px] border border-purple-100 dark:border-white/[0.08] bg-white dark:bg-[#12131f] p-5 sm:p-6 shadow-2xl gap-0">
+        <DialogContent >
           <DialogHeader className="pb-4 text-left">
             <DialogTitle className="text-xl font-extrabold tracking-tight text-zinc-900 dark:text-white">
               Account
@@ -851,7 +833,7 @@ export default function DashboardPage() {
 
       {/* Edit Profile Dialog */}
       <Dialog open={isEditProfileOpen} onOpenChange={setIsEditProfileOpen}>
-        <DialogContent className="max-w-[360px] sm:max-w-[400px] rounded-[28px] border border-purple-100 dark:border-white/[0.08] bg-white dark:bg-[#12131f] p-5 sm:p-6 shadow-2xl">
+        <DialogContent>
           <DialogHeader className="pb-3 text-left">
             <DialogTitle className="text-lg font-extrabold tracking-tight text-zinc-900 dark:text-white">
               Edit Profile
@@ -911,7 +893,7 @@ export default function DashboardPage() {
                   onClick={() => fileInputRef.current?.click()}
                   className="rounded-full bg-purple-100 hover:bg-purple-200/80 dark:bg-purple-950/60 dark:hover:bg-purple-900/60 px-3 py-1 text-xs font-semibold text-purple-700 dark:text-purple-300 transition-colors cursor-pointer"
                 >
-                  Change Photo
+                  {profileImagePreview ? "Change Photo" : "Upload Photo"}
                 </button>
                 {profileImagePreview && (
                   <button
@@ -989,6 +971,49 @@ export default function DashboardPage() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Full Profile Image Viewer Dialog (Only displays full profile image, no settings or form) */}
+      <Dialog open={isProfileImageViewerOpen} onOpenChange={setIsProfileImageViewerOpen}>
+        <DialogContent>
+          <DialogHeader className="items-center text-center">
+            <DialogTitle className="text-base font-bold text-zinc-900 dark:text-zinc-100">
+              Profile Photo
+            </DialogTitle>
+            <DialogDescription className="text-xs text-zinc-500 dark:text-zinc-400">
+              {activeUser?.name || "User"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="mt-4 flex flex-col items-center justify-center">
+            <div className="relative flex h-75 w-75 sm:h-60 sm:w-60 shrink-0 items-center justify-center rounded-full ring-4 ring-purple-500/80 bg-white dark:bg-[#1a1b2e] shadow-xl overflow-hidden">
+              {activeUser?.image && !avatarError ? (
+                <img
+                  src={activeUser.image}
+                  alt={activeUser.name || "User profile"}
+                  className="h-full w-full object-cover"
+                  onError={() => setAvatarError(true)}
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-6xl font-black text-white select-none">
+                  {userInitial}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 flex justify-center">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsProfileImageViewerOpen(false)}
+                className="rounded-xl px-5 text-xs font-semibold"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

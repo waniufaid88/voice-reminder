@@ -37,12 +37,37 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
   const [showPermissionBanner, setShowPermissionBanner] = useState(false);
 
   const notifiedIdsRef = useRef<Set<string>>(new Set());
+  const lastPushTimeMap = useRef<Map<string, number>>(new Map());
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const alarmIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const alarmTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   /**
+   * Returns a persistent, unlocked AudioContext that remains active across multiple reminders.
+   */
+  const getOrCreateAudioContext = useCallback(() => {
+    try {
+      if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioCtx) return null;
+        audioCtxRef.current = new AudioCtx();
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+      return audioCtxRef.current;
+    } catch (e) {
+      console.warn("[NotificationWatcher] AudioContext initialization failed:", e);
+      return null;
+    }
+  }, []);
+
+  /**
    * Immediately stops any ongoing alarm audio and clears all interval/timeout timers.
+   * Keeps AudioContext alive so subsequent reminders in the background can sound without user interaction.
    */
   const stopAlarm = useCallback(() => {
     if (alarmTimerRef.current) {
@@ -53,38 +78,31 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
       clearInterval(alarmIntervalRef.current);
       alarmIntervalRef.current = null;
     }
-    if (audioCtxRef.current) {
+    if (audioPlayerRef.current) {
       try {
-        audioCtxRef.current.close();
-      } catch {
-        // Safe fallback
-      }
-      audioCtxRef.current = null;
+        audioPlayerRef.current.pause();
+        audioPlayerRef.current.currentTime = 0;
+      } catch {}
     }
     setIsAlarmPlaying(false);
   }, []);
 
   /**
-   * Starts a continuous, attention-grabbing Web Audio alarm for at least 15 seconds.
+   * Starts a continuous, attention-grabbing alarm for at least 15 seconds.
    * Plays a repeating melodious alert pattern every 1.25s until auto-stopped at 15s or silenced.
+   * Dual-engine: persistent Web Audio API + HTML5 audio element for mobile background reliability.
    */
   const startAlarm = useCallback(() => {
     stopAlarm();
 
     try {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AudioCtx) return;
-
-      const ctx = new AudioCtx();
-      audioCtxRef.current = ctx;
+      const ctx = getOrCreateAudioContext();
       setIsAlarmPlaying(true);
 
       const playChimeBurst = () => {
         if (!ctx || ctx.state === "closed") return;
         if (ctx.state === "suspended") {
-          ctx.resume();
+          ctx.resume().catch(() => {});
         }
 
         const now = ctx.currentTime;
@@ -96,21 +114,23 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
         ];
 
         notes.forEach(({ freq, time }) => {
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
+          try {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
 
-          osc.type = "sine";
-          osc.frequency.setValueAtTime(freq, time);
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(freq, time);
 
-          gain.gain.setValueAtTime(0, time);
-          gain.gain.linearRampToValueAtTime(0.3, time + 0.02);
-          gain.gain.exponentialRampToValueAtTime(0.001, time + 0.4);
+            gain.gain.setValueAtTime(0, time);
+            gain.gain.linearRampToValueAtTime(0.3, time + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, time + 0.4);
 
-          osc.connect(gain);
-          gain.connect(ctx.destination);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
 
-          osc.start(time);
-          osc.stop(time + 0.42);
+            osc.start(time);
+            osc.stop(time + 0.42);
+          } catch {}
         });
       };
 
@@ -120,6 +140,14 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
       // Play continuous chime pattern every 1.25s for 15 seconds
       alarmIntervalRef.current = setInterval(playChimeBurst, 1250);
 
+      // Play HTML5 audio chime backup (reliably plays on mobile background)
+      if (audioPlayerRef.current) {
+        try {
+          audioPlayerRef.current.currentTime = 0;
+          audioPlayerRef.current.play().catch(() => {});
+        } catch {}
+      }
+
       // Automatically stop after exactly 15 seconds (15,000 ms)
       alarmTimerRef.current = setTimeout(() => {
         stopAlarm();
@@ -127,7 +155,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
     } catch (err) {
       console.warn("[NotificationWatcher] AudioContext failed to initialize:", err);
     }
-  }, [stopAlarm]);
+  }, [stopAlarm, getOrCreateAudioContext]);
 
   /**
    * Subscribes the client browser to Web Push using the VAPID Public Key and registers with Convex.
@@ -247,37 +275,47 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
   }, [userId, subscribeToWebPush]);
 
   /**
-   * User interaction listener to pre-warm audio context (handles browser autoplay policies)
+   * User interaction listener to pre-warm audio context and HTML5 audio element
+   * (handles mobile browser autoplay policies and keeps audio unlocked across backgrounding)
    */
   useEffect(() => {
     const unlockAudio = () => {
       try {
-        const AudioCtx =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (AudioCtx) {
-          const ctx = new AudioCtx();
-          if (ctx.state === "suspended") {
-            ctx.resume();
+        const ctx = getOrCreateAudioContext();
+        if (ctx && ctx.state === "suspended") {
+          ctx.resume().catch(() => {});
+        }
+        if (audioPlayerRef.current) {
+          audioPlayerRef.current.volume = 0.01;
+          const playPromise = audioPlayerRef.current.play();
+          if (playPromise !== undefined) {
+            playPromise
+              .then(() => {
+                if (audioPlayerRef.current) {
+                  audioPlayerRef.current.pause();
+                  audioPlayerRef.current.currentTime = 0;
+                  audioPlayerRef.current.volume = 1.0;
+                }
+              })
+              .catch(() => {});
           }
-          ctx.close();
         }
       } catch {
         // Ignore pre-warm errors
       }
-      window.removeEventListener("click", unlockAudio);
-      window.removeEventListener("touchstart", unlockAudio);
     };
 
-    window.addEventListener("click", unlockAudio, { once: true });
-    window.addEventListener("touchstart", unlockAudio, { once: true });
+    window.addEventListener("click", unlockAudio);
+    window.addEventListener("touchstart", unlockAudio);
+    window.addEventListener("keydown", unlockAudio);
 
     return () => {
       window.removeEventListener("click", unlockAudio);
       window.removeEventListener("touchstart", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
       stopAlarm();
     };
-  }, [stopAlarm]);
+  }, [stopAlarm, getOrCreateAudioContext]);
 
   /**
    * Monitor active reminders and trigger in-app alert + 15s alarm sound when due
@@ -340,7 +378,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
               body: item.content || "Your scheduled reminder is due!",
               icon: origin ? `${origin}/icon-192.png` : "/icon-192.png",
               badge: origin ? `${origin}/badge-72.png` : "/badge-72.png",
-              tag: `reminder-${item._id}`,
+              tag: `reminder-${item._id}-${Date.now()}`,
               renotify: true,
               requireInteraction: true,
               silent: false,
@@ -387,11 +425,13 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
       if (event.data?.type === "PUSH_REMINDER_NOTIFICATION") {
         const itemId = event.data.itemId;
         if (itemId) {
-          const pushKey = `${itemId}_push`;
-          if (notifiedIdsRef.current.has(pushKey)) {
+          const now = Date.now();
+          const lastPush = lastPushTimeMap.current.get(itemId) || 0;
+          // Debounce 10 seconds: prevents duplicate push bursts while allowing snoozed reminders (15m later) to trigger
+          if (now - lastPush < 10000) {
             return;
           }
-          notifiedIdsRef.current.add(pushKey);
+          lastPushTimeMap.current.set(itemId, now);
         }
         startAlarm();
         if (event.data.itemId) {
@@ -436,9 +476,27 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
    */
   const handleSnooze = async (minutes: number) => {
     if (!alertingItem) return;
+    const itemId = alertingItem._id;
     stopAlarm();
     try {
-      await snoozeReminder({ itemId: alertingItem._id, minutes });
+      await snoozeReminder({ itemId, minutes });
+      // Clear local deduplication caches so snoozed reminder alerts cleanly when due
+      for (const key of Array.from(notifiedIdsRef.current)) {
+        if (key.startsWith(itemId)) {
+          notifiedIdsRef.current.delete(key);
+        }
+      }
+      lastPushTimeMap.current.delete(itemId);
+      if (typeof window !== "undefined") {
+        try {
+          for (let i = sessionStorage.length - 1; i >= 0; i--) {
+            const k = sessionStorage.key(i);
+            if (k && k.includes(itemId)) {
+              sessionStorage.removeItem(k);
+            }
+          }
+        } catch {}
+      }
       toast.success(`Snoozed for ${minutes >= 60 ? `${minutes / 60} hour` : `${minutes} mins`} 💤`);
     } catch {
       toast.error("Failed to snooze reminder");
@@ -638,6 +696,14 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
           </div>
         </div>
       )}
+
+      {/* Hidden audio element for HTML5 audio alarm backup */}
+      <audio
+        ref={audioPlayerRef}
+        src="/alarm-chime.wav"
+        preload="auto"
+        className="hidden"
+      />
     </>
   );
 }

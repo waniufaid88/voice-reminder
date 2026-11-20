@@ -273,10 +273,11 @@ export function matchTeamDestination(
 }
 
 /**
- * Removes the team destination phrasing from a reminder title so it reads cleanly.
+ * Removes the team destination phrasing from a reminder title or description so it reads cleanly.
  * e.g., "In Friends submit assignment" -> "Submit assignment"
  * e.g., "Submit assignment in Friends" -> "Submit assignment"
  * e.g., "Office: sprint planning" -> "Sprint planning"
+ * e.g., "Remind Office team to finish report" -> "Finish report"
  */
 export function cleanTeamDestinationText(
   text: string,
@@ -286,14 +287,15 @@ export function cleanTeamDestinationText(
   let cleaned = text;
 
   if (teamName) {
-    const escaped = escapeRegex(teamName);
-    // Remove variations like "in Friends", "for Friends team", "Friends:", "remind Friends to"
+    const escaped = escapeRegex(teamName.trim());
+    // Remove variations like "in Friends", "for Friends team", "Friends:", "remind Friends to", "remind me in Friends to"
     const patterns = [
+      new RegExp(`^\\s*remind\\s+(?:me\\s+)?(?:in|for|to|with|at)?\\s+(?:the\\s+)?(?:team\\s+)?${escaped}(?:\\s+team)?\\s*(?:to\\s+)?`, "i"),
       new RegExp(`^\\s*(?:team\\s+)?${escaped}(?:\\s+team)?\\s*[:—–-]\\s*`, "i"),
-      new RegExp(`\\b(?:in|for|to|with)\\s+(?:the\\s+)?(?:team\\s+)?${escaped}(?:\\s+team)?\\b`, "gi"),
+      new RegExp(`\\b(?:in|for|to|with|at|from)\\s+(?:the\\s+)?(?:team\\s+)?${escaped}(?:\\s+team)?\\b`, "gi"),
       new RegExp(`\\b(?:team\\s+)?${escaped}\\s+team\\b`, "gi"),
-      new RegExp(`^\\s*remind\\s+(?:the\\s+)?${escaped}\\s+(?:team\\s+)?(?:to\\s+)?`, "i"),
-      new RegExp(`\\b${escaped}\\b`, "i"),
+      new RegExp(`\\bteam\\s+${escaped}\\b`, "gi"),
+      new RegExp(`\\b${escaped}\\b`, "gi"),
     ];
 
     for (const pat of patterns) {
@@ -303,9 +305,10 @@ export function cleanTeamDestinationText(
 
   // Remove leftover trailing/leading prepositions or punctuation
   cleaned = cleaned
-    .replace(/^[\s:—–-]+/, "")
-    .replace(/[\s:—–-]+$/, "")
-    .replace(/\s+(?:in|for|to|with)\s*$/i, "")
+    .replace(/^[\s:—–,\-.]+/, "")
+    .replace(/[\s:—–,\-.]+$/, "")
+    .replace(/\s+(?:in|for|to|with|at|from)\s*$/i, "")
+    .replace(/^remind\s+(?:me\s+)?(?:to\s+)?/i, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 

@@ -31,11 +31,11 @@ self.addEventListener("push", (event) => {
   const origin = self.location.origin || "";
   const itemId = data.itemId || data.data?.itemId;
 
-  // Prevent multiple duplicate alerts for the same reminder within 60 seconds
+  // Deduplicate rapid duplicate push deliveries for the exact same reminder within 10 seconds
   const now = Date.now();
   if (itemId && recentNotifTimestamps.has(itemId)) {
     const lastTime = recentNotifTimestamps.get(itemId);
-    if (now - lastTime < 60000) {
+    if (now - lastTime < 10000) {
       return;
     }
   }
@@ -47,7 +47,8 @@ self.addEventListener("push", (event) => {
     }
   }
 
-  const tag = itemId ? `reminder-${itemId}` : `reminder-${Date.now()}`;
+  // Use unique tag per reminder alert to ensure Android mobile plays sound and vibrates for every reminder
+  const tag = `reminder-${itemId || "alert"}-${Date.now()}`;
 
   const iconUrl = origin ? `${origin}/icon-192.png` : "/icon-192.png";
   const badgeUrl = origin ? `${origin}/badge-72.png` : "/badge-72.png";
@@ -60,7 +61,7 @@ self.addEventListener("push", (event) => {
     renotify: true,
     requireInteraction: true,
     silent: false,
-    vibrate: [300, 150, 300, 150, 300, 150, 500],
+    vibrate: [500, 250, 500, 250, 500, 250, 500],
     data: {
       url: data.url || "/",
       itemId,
@@ -143,6 +144,7 @@ self.addEventListener("notificationclick", (event) => {
 
   // Action button: "snooze"
   if (action === "snooze" && itemId) {
+    recentNotifTimestamps.delete(itemId);
     event.waitUntil(
       fetch("/api/notifications/action", {
         method: "POST",

@@ -39,6 +39,9 @@ export const validateSession = query({
     if (!user) return null;
 
     let image = user.image;
+    if (image === "") {
+      image = undefined;
+    }
     if (!image && user.imageStorageId) {
       image = (await ctx.storage.getUrl(user.imageStorageId)) || undefined;
     }

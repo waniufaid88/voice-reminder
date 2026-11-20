@@ -523,8 +523,8 @@ export const snoozeReminder = mutation({
     const item = await ctx.db.get(args.itemId);
     if (!item) throw new Error("Item not found");
 
-    const baseTime = Math.max(item.dueDate ?? Date.now(), Date.now());
-    const newDueDate = baseTime + args.minutes * 60 * 1000;
+    const now = Date.now();
+    const newDueDate = now + args.minutes * 60 * 1000;
 
     if (item.scheduledJobId) {
       try {
@@ -548,7 +548,7 @@ export const snoozeReminder = mutation({
       reminderStatus: "pending",
       isNotified: false,
       scheduledJobId,
-      updatedAt: Date.now(),
+      updatedAt: now,
     });
   },
 });

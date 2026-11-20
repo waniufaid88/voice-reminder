@@ -58,6 +58,7 @@ export const updateProfile = mutation({
     name: v.optional(v.string()),
     image: v.optional(v.string()),
     imageStorageId: v.optional(v.id("_storage")),
+    removeImage: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
@@ -65,7 +66,7 @@ export const updateProfile = mutation({
 
     const patch: {
       name?: string;
-      image?: string;
+      image?: string | undefined;
       imageStorageId?: any;
     } = {};
 
@@ -77,12 +78,27 @@ export const updateProfile = mutation({
       patch.name = trimmed;
     }
 
-    if (args.imageStorageId !== undefined) {
+    const shouldRemove = args.removeImage === true || args.image === "";
+
+    if (shouldRemove) {
+      // User explicitly requested to remove the profile picture
+      if (user.imageStorageId) {
+        try {
+          await ctx.storage.delete(user.imageStorageId);
+        } catch {}
+      }
+      patch.image = undefined;
+      patch.imageStorageId = undefined;
+    } else if (args.imageStorageId !== undefined) {
+      // User uploaded a new picture to Convex storage
+      if (user.imageStorageId && user.imageStorageId !== args.imageStorageId) {
+        try {
+          await ctx.storage.delete(user.imageStorageId);
+        } catch {}
+      }
       patch.imageStorageId = args.imageStorageId;
       const url = await ctx.storage.getUrl(args.imageStorageId);
-      if (url) {
-        patch.image = url;
-      }
+      patch.image = url || undefined;
     } else if (args.image !== undefined) {
       patch.image = args.image;
     }
@@ -91,8 +107,11 @@ export const updateProfile = mutation({
 
     const updated = await ctx.db.get(args.userId);
     let finalImage = updated?.image;
-    if (!finalImage && updated?.imageStorageId) {
+    if (!finalImage && updated?.imageStorageId && !shouldRemove) {
       finalImage = (await ctx.storage.getUrl(updated.imageStorageId)) || undefined;
+    }
+    if (shouldRemove) {
+      finalImage = undefined;
     }
 
     return {
@@ -111,6 +130,9 @@ export const getProfile = query({
     if (!user) return null;
 
     let image = user.image;
+    if (image === "") {
+      image = undefined;
+    }
     if (!image && user.imageStorageId) {
       image = (await ctx.storage.getUrl(user.imageStorageId)) || undefined;
     }
@@ -119,7 +141,7 @@ export const getProfile = query({
       _id: user._id,
       name: user.name,
       email: user.email,
-      image,
+      image: image || undefined,
       createdAt: user.createdAt,
     };
   },

@@ -325,18 +325,32 @@ function parseTextRuleBased(
     );
 
     if (multiple.length > 1) {
-      const multiWithTeam = multiple.map((it) => ({
-        ...it,
-        teamId,
-        teamName,
-        isTeamAmbiguous,
-        ambiguousTeams,
-      }));
+      const multiWithTeam = multiple.map((it) => {
+        let cleanTitle = it.title;
+        let cleanContent = it.content || it.title;
+        if (teamName) {
+          cleanTitle = cleanTeamDestinationText(cleanTitle, teamName);
+          cleanContent = cleanTeamDestinationText(cleanContent, teamName);
+        }
+        return {
+          ...it,
+          title: cleanTitle,
+          content: cleanContent,
+          teamId,
+          teamName,
+          isTeamAmbiguous,
+          ambiguousTeams,
+        };
+      });
+
+      const primaryContent = teamName
+        ? cleanTeamDestinationText(cleanReminderContent(rawText), teamName)
+        : cleanReminderContent(rawText);
 
       return {
         type: "reminder" as const,
         title: multiWithTeam[0].title,
-        content: cleanReminderContent(rawText),
+        content: primaryContent,
         dueDate: multiWithTeam[0].dueDate,
         dueDateLocal: multiWithTeam[0].dueDateLocal,
         recurrenceMode: multiWithTeam[0].recurrenceMode,
@@ -352,10 +366,18 @@ function parseTextRuleBased(
       };
     }
 
+    let finalTitle = natural.title || cleanReminderTitle(rawText);
+    let finalContent = cleanReminderContent(rawText);
+
+    if (teamName) {
+      finalTitle = cleanTeamDestinationText(finalTitle, teamName);
+      finalContent = cleanTeamDestinationText(finalContent, teamName);
+    }
+
     const reminderItem: FormattedItem = {
       type: "reminder",
-      title: natural.title || cleanReminderTitle(rawText),
-      content: cleanReminderContent(rawText),
+      title: finalTitle,
+      content: finalContent,
       dueDate: natural.dueDate,
       dueDateLocal: natural.dueDateLocal,
       recurrenceMode: natural.recurrenceMode || "once",
@@ -1034,7 +1056,7 @@ Rules for Team Selection:
      Set "teamName" to that team's exact name.
      Set "isTeamAmbiguous" to false.
      Set "ambiguousTeamIds" to [].
-     Clean the reminder title so it doesn't redundantly repeat the team destination phrase (e.g. "Remind Office to submit quarterly report" -> title: "Submit quarterly report", teamId: "<Office_id>").
+     CRITICAL: Do NOT include the team name or team destination phrasing in the reminder's "title" or "content" (description). The team name must ONLY be used to identify the destination team. Both "title" and "content" must be clean task descriptions without the team name (e.g. "Remind Office to submit quarterly report" -> title: "Submit quarterly report", content: "Submit quarterly report", teamId: "<Office_id>").
    - If the mention is ambiguous between multiple available teams (for example, the user mentions "Office" and they belong to both "Office Marketing" and "Office Engineering"):
      Set "teamId": null.
      Set "teamName": the mentioned name.
@@ -1230,15 +1252,16 @@ For a single item, items must contain exactly one item.
                         String(item.content || "")
                       );
 
-                  if (detectedTeamName) {
-                    title = cleanTeamDestinationText(title, detectedTeamName);
-                  }
-
-                  const content =
+                  let content =
                     typeof item.content === "string" &&
                       item.content.trim()
                       ? item.content.trim()
                       : cleanReminderContent(title);
+
+                  if (detectedTeamName) {
+                    title = cleanTeamDestinationText(title, detectedTeamName);
+                    content = cleanTeamDestinationText(content, detectedTeamName);
+                  }
 
                   return {
                     type: "reminder",
@@ -1281,13 +1304,23 @@ For a single item, items must contain exactly one item.
               );
 
               if (ruleItems.length > 1) {
-                formattedItems = ruleItems.map((r) => ({
-                  ...r,
-                  teamId: detectedTeamId,
-                  teamName: detectedTeamName,
-                  isTeamAmbiguous,
-                  ambiguousTeams,
-                }));
+                formattedItems = ruleItems.map((r) => {
+                  let t = r.title;
+                  let c = r.content || r.title;
+                  if (detectedTeamName) {
+                    t = cleanTeamDestinationText(t, detectedTeamName);
+                    c = cleanTeamDestinationText(c, detectedTeamName);
+                  }
+                  return {
+                    ...r,
+                    title: t,
+                    content: c,
+                    teamId: detectedTeamId,
+                    teamName: detectedTeamName,
+                    isTeamAmbiguous,
+                    ambiguousTeams,
+                  };
+                });
               }
             }
           }
@@ -1433,12 +1466,13 @@ For a single item, items must contain exactly one item.
                   natural.title || cleanReminderTitle(rawText);
               }
 
-              if (detectedTeamName) {
-                finalTitle = cleanTeamDestinationText(finalTitle, detectedTeamName);
-              }
-
               if (!finalContent) {
                 finalContent = cleanReminderContent(rawText);
+              }
+
+              if (detectedTeamName) {
+                finalTitle = cleanTeamDestinationText(finalTitle, detectedTeamName);
+                finalContent = cleanTeamDestinationText(finalContent, detectedTeamName);
               }
             }
 
