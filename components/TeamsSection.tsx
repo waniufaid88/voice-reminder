@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import toast from "react-hot-toast";
 import {
@@ -56,6 +56,9 @@ interface TeamsSectionProps {
   currentTime: number;
   onEditItem: (item: ItemRecord) => void;
   onAddTeamReminder?: (teamId: Id<"teams">) => void;
+  searchQuery?: string;
+  onSearchChange?: (query: string) => void;
+  onTeamStateChange?: (state: { teamName: string | null; subTab: string }) => void;
 }
 
 export function TeamsSection({
@@ -63,6 +66,9 @@ export function TeamsSection({
   currentTime,
   onEditItem,
   onAddTeamReminder,
+  searchQuery = "",
+  onSearchChange,
+  onTeamStateChange,
 }: TeamsSectionProps) {
   const userId = user._id as Id<"users">;
 
@@ -137,6 +143,29 @@ export function TeamsSection({
       setEditErrors({});
     }
   }, [teamDetails?.team?._id, teamDetails?.team?.name, teamDetails?.team?.description]);
+
+  // Synchronize active team and sub-tab context for dynamic search placeholder
+  useEffect(() => {
+    if (onTeamStateChange) {
+      onTeamStateChange({
+        teamName: selectedTeamId && teamDetails?.team ? teamDetails.team.name : null,
+        subTab: activeTeamSubTab,
+      });
+    }
+  }, [selectedTeamId, teamDetails?.team?.name, activeTeamSubTab, onTeamStateChange]);
+
+  // Filtered teams list based on search query
+  const filteredTeams = useMemo(() => {
+    if (!myTeams) return undefined;
+    const q = searchQuery?.trim().toLowerCase();
+    if (!q) return myTeams;
+    return myTeams.filter((t): t is NonNullable<typeof t> => {
+      if (!t) return false;
+      const matchesName = t.name.toLowerCase().includes(q);
+      const matchesDesc = t.description?.toLowerCase().includes(q);
+      return Boolean(matchesName || matchesDesc);
+    });
+  }, [myTeams, searchQuery]);
 
   // Convex Mutations
   const createTeam = useMutation(api.teams.createTeam);
@@ -487,116 +516,146 @@ export function TeamsSection({
               userId={userId}
               teamId={team._id}
               currentTime={currentTime}
+              searchQuery={searchQuery}
               onEdit={onEditItem}
               title={`${team.name} Reminders`}
               hideIfEmpty={false}
+              onClearSearch={onSearchChange ? () => onSearchChange("") : undefined}
             />
           </div>
         )}
 
         {/* Tab 2: Members List */}
-        {activeTeamSubTab === "members" && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-zinc-500">
-                Team Members ({members.length})
-              </h2>
-              {canManage && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setGeneratedInviteLink(null);
-                    setIsInviteOpen(true);
-                  }}
-                  className="text-xs gap-1.5 rounded-xl cursor-pointer"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  <span>Invite New Member</span>
-                </Button>
-              )}
-            </div>
+        {activeTeamSubTab === "members" && (() => {
+          const q = searchQuery?.trim().toLowerCase();
+          const filteredMembers = q
+            ? members.filter(
+                (m) =>
+                  m.name.toLowerCase().includes(q) ||
+                  m.email.toLowerCase().includes(q)
+              )
+            : members;
 
-            <div className="rounded-2xl border border-zinc-200/80 dark:border-white/[0.08] bg-white dark:bg-[#151624] divide-y divide-zinc-200/70 dark:divide-white/[0.06] overflow-hidden">
-              {members.map((m) => {
-                const isCurrentUser = m.userId === userId;
-                return (
-                  <div
-                    key={m.userId}
-                    className="p-3 sm:p-4 flex items-center justify-between gap-2.5 sm:gap-4 hover:bg-zinc-50/60 dark:hover:bg-white/[0.02] transition-colors"
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-zinc-500">
+                  Team Members ({filteredMembers.length}{q ? ` of ${members.length}` : ""})
+                </h2>
+                {canManage && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setGeneratedInviteLink(null);
+                      setIsInviteOpen(true);
+                    }}
+                    className="text-xs gap-1.5 rounded-xl cursor-pointer"
                   >
-                    {/* Left: Avatar + Name + Email in one horizontal block */}
-                    <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-purple-600 text-white font-bold text-xs shadow-xs">
-                        {m.name.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="font-bold text-xs sm:text-sm text-zinc-900 dark:text-white truncate">
-                            {m.name}
-                          </span>
-                          {isCurrentUser && (
-                            <span className="text-[10px] shrink-0 font-semibold text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/40 px-1.5 py-0.2 rounded">
-                              (You)
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>Invite New Member</span>
+                  </Button>
+                )}
+              </div>
+
+              {filteredMembers.length === 0 ? (
+                <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-200 dark:border-white/[0.08] p-8 text-center bg-white/40 dark:bg-[#151624]">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    No team members match &quot;{searchQuery}&quot;
+                  </p>
+                  {onSearchChange && (
+                    <button
+                      type="button"
+                      onClick={() => onSearchChange("")}
+                      className="mt-2 text-xs font-semibold text-purple-600 hover:text-purple-500 dark:text-purple-400 cursor-pointer"
+                    >
+                      Clear Search
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-zinc-200/80 dark:border-white/[0.08] bg-white dark:bg-[#151624] divide-y divide-zinc-200/70 dark:divide-white/[0.06] overflow-hidden">
+                  {filteredMembers.map((m) => {
+                    const isCurrentUser = m.userId === userId;
+                    return (
+                      <div
+                        key={m.userId}
+                        className="p-3 sm:p-4 flex items-center justify-between gap-2.5 sm:gap-4 hover:bg-zinc-50/60 dark:hover:bg-white/[0.02] transition-colors"
+                      >
+                        {/* Left: Avatar + Name + Email in one horizontal block */}
+                        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-purple-600 text-white font-bold text-xs shadow-xs">
+                            {m.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="font-bold text-xs sm:text-sm text-zinc-900 dark:text-white truncate">
+                                {m.name}
+                              </span>
+                              {isCurrentUser && (
+                                <span className="text-[10px] shrink-0 font-semibold text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/40 px-1.5 py-0.2 rounded">
+                                  (You)
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] sm:text-xs text-zinc-500 dark:text-zinc-400 truncate">
+                              {m.email}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Right: Role & Actions in same horizontal row */}
+                        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                          {/* Role Badge / Role Selector for Owner */}
+                          {userRole === "owner" && !isCurrentUser ? (
+                            <select
+                              value={m.role}
+                              onChange={(e) =>
+                                handleRoleChange(m.userId, e.target.value as "admin" | "member")
+                              }
+                              className="rounded-lg border border-zinc-200 dark:border-white/[0.1] bg-white dark:bg-[#1e1f32] px-2 py-1 text-[11px] sm:text-xs font-semibold text-zinc-700 dark:text-zinc-200 focus:outline-none focus:border-purple-600 cursor-pointer"
+                            >
+                              <option value="admin">Admin</option>
+                              <option value="member">Member</option>
+                            </select>
+                          ) : (
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-semibold ${m.role === "owner"
+                                ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+                                : m.role === "admin"
+                                  ? "bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300"
+                                  : "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-300"
+                                }`}
+                            >
+                              {m.role === "owner" && <Crown className="h-3 w-3" />}
+                              {m.role === "admin" && <Shield className="h-3 w-3" />}
+                              {m.role === "member" && <User className="h-3 w-3" />}
+                              <span>{m.role.toUpperCase()}</span>
                             </span>
                           )}
+
+                          {/* Remove Member Button */}
+                          {!isCurrentUser &&
+                            m.role !== "owner" &&
+                            (userRole === "owner" || (userRole === "admin" && m.role === "member")) && (
+                              <button
+                                type="button"
+                                onClick={() => setMemberToRemove({ userId: m.userId, name: m.name })}
+                                className="rounded-lg p-1 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                                title={`Remove ${m.name}`}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                         </div>
-                        <p className="text-[11px] sm:text-xs text-zinc-500 dark:text-zinc-400 truncate">
-                          {m.email}
-                        </p>
                       </div>
-                    </div>
-
-                    {/* Right: Role & Actions in same horizontal row */}
-                    <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                      {/* Role Badge / Role Selector for Owner */}
-                      {userRole === "owner" && !isCurrentUser ? (
-                        <select
-                          value={m.role}
-                          onChange={(e) =>
-                            handleRoleChange(m.userId, e.target.value as "admin" | "member")
-                          }
-                          className="rounded-lg border border-zinc-200 dark:border-white/[0.1] bg-white dark:bg-[#1e1f32] px-2 py-1 text-[11px] sm:text-xs font-semibold text-zinc-700 dark:text-zinc-200 focus:outline-none focus:border-purple-600 cursor-pointer"
-                        >
-                          <option value="admin">Admin</option>
-                          <option value="member">Member</option>
-                        </select>
-                      ) : (
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-semibold ${m.role === "owner"
-                            ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
-                            : m.role === "admin"
-                              ? "bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300"
-                              : "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-300"
-                            }`}
-                        >
-                          {m.role === "owner" && <Crown className="h-3 w-3" />}
-                          {m.role === "admin" && <Shield className="h-3 w-3" />}
-                          {m.role === "member" && <User className="h-3 w-3" />}
-                          <span>{m.role.toUpperCase()}</span>
-                        </span>
-                      )}
-
-                      {/* Remove Member Button */}
-                      {!isCurrentUser &&
-                        m.role !== "owner" &&
-                        (userRole === "owner" || (userRole === "admin" && m.role === "member")) && (
-                          <button
-                            type="button"
-                            onClick={() => setMemberToRemove({ userId: m.userId, name: m.name })}
-                            className="rounded-lg p-1 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
-                            title={`Remove ${m.name}`}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Tab 3: Pending Invitations */}
         {activeTeamSubTab === "invitations" && canManage && (
@@ -1154,9 +1213,30 @@ export function TeamsSection({
             <span>Create Your First Team</span>
           </Button>
         </div>
+      ) : filteredTeams && filteredTeams.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 dark:border-white/[0.1] py-16 text-center p-6">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-purple-100 text-purple-600 dark:bg-purple-950/60 dark:text-purple-400 text-2xl mb-3">
+            🔍
+          </div>
+          <h3 className="text-base font-bold text-zinc-900 dark:text-white">
+            No teams match &quot;{searchQuery}&quot;
+          </h3>
+          <p className="mt-1 text-xs text-zinc-500 max-w-sm">
+            Try a different search term or clear your search to view all your teams.
+          </p>
+          {onSearchChange && (
+            <Button
+              variant="outline"
+              onClick={() => onSearchChange("")}
+              className="mt-4 gap-1.5 text-xs rounded-xl cursor-pointer"
+            >
+              Clear Search
+            </Button>
+          )}
+        </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {myTeams.map((t) => {
+          {filteredTeams?.map((t) => {
             if (!t) return null;
             return (
               <div

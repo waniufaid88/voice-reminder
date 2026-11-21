@@ -16,6 +16,7 @@ interface TabBasedReminderDashboardProps {
   onEdit: (item: ItemRecord) => void;
   title?: string;
   hideIfEmpty?: boolean;
+  onClearSearch?: () => void;
 }
 
 export function TabBasedReminderDashboard({
@@ -27,6 +28,7 @@ export function TabBasedReminderDashboard({
   onEdit,
   title,
   hideIfEmpty = false,
+  onClearSearch,
 }: TabBasedReminderDashboardProps) {
   // 1. Dashboard Design: Default selection is Upcoming
   const [activeTab, setActiveTab] = useState<"upcoming" | "overdue" | "completed">("upcoming");
@@ -301,6 +303,17 @@ export function TabBasedReminderDashboard({
                     : "When you mark reminders as done, they will be archived here."}
                 </p>
               </>
+            )}
+
+            {searchQuery && onClearSearch && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onClearSearch}
+                className="mt-3 text-xs rounded-xl cursor-pointer"
+              >
+                Clear Search
+              </Button>
             )}
           </div>
         ) : (

@@ -17,6 +17,7 @@ interface FilterBarProps {
   availableTags: string[];
   selectedTag: string | null;
   onTagSelect: (tag: string | null) => void;
+  searchPlaceholder?: string;
 }
 
 export function FilterBar({
@@ -28,12 +29,26 @@ export function FilterBar({
   availableTags,
   selectedTag,
   onTagSelect,
+  searchPlaceholder,
 }: FilterBarProps) {
   // Default sample tags if none exist yet, ensuring user sees the design tags #list #voice #note #reminder #task
   const displayTags =
     availableTags.length > 0
       ? availableTags
       : ["list", "voice", "note", "reminder", "task"];
+
+  const defaultPlaceholder =
+    activeTab === "reminder"
+      ? "Search personal reminders..."
+      : activeTab === "note"
+        ? "Search notes..."
+        : activeTab === "list"
+          ? "Search lists..."
+          : activeTab === "teams"
+            ? "Search teams..."
+            : "Search all personal items...";
+
+  const placeholder = searchPlaceholder || defaultPlaceholder;
 
   return (
     <div className="space-y-3.5 select-none">
@@ -117,7 +132,7 @@ export function FilterBar({
           <input
             id="dashboard-search-input"
             type="text"
-            placeholder="Search anything..."
+            placeholder={placeholder}
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             className="w-full rounded-xl border border-zinc-200/90 bg-white py-2 pl-9 pr-8 text-xs text-zinc-900 placeholder-zinc-400 focus:border-purple-600 focus:outline-none dark:border-white/[0.08] dark:bg-[#161726] dark:text-zinc-100 dark:placeholder-zinc-500 shadow-2xs"

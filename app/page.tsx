@@ -171,6 +171,19 @@ export default function DashboardPage() {
     user?._id ? { userId: user._id as Id<"users"> } : "skip"
   );
 
+  // Filtered reminder counts for accurate real-time tab badge counts
+  const reminderCounts = useQuery(
+    api.items.getReminderCounts,
+    user?._id
+      ? {
+          userId: user._id as Id<"users">,
+          clientNow: currentTime > 0 ? currentTime : undefined,
+          searchQuery: searchQuery || undefined,
+          tag: selectedTag || undefined,
+        }
+      : "skip"
+  );
+
   // Available tags extracted dynamically
   const availableTags = useMemo(() => {
     if (!rawItems) return [];
@@ -204,18 +217,60 @@ export default function DashboardPage() {
     });
   }, [rawItems, activeTab, selectedTag, searchQuery]);
 
-  // Counts for main filter tabs
+  // Real-time filtered counts for main filter tabs
   const counts = useMemo(() => {
-    const teamsCount = myTeams ? myTeams.length : 0;
-    if (!rawItems) return { all: 0, note: 0, reminder: 0, list: 0, teams: teamsCount };
+    const q = searchQuery.trim().toLowerCase();
+    const tag = selectedTag;
+
+    // Filtered teams count
+    let teamsCount = 0;
+    if (myTeams) {
+      if (!q) {
+        teamsCount = myTeams.length;
+      } else {
+        teamsCount = myTeams.filter((t) => {
+          if (!t) return false;
+          return (
+            t.name.toLowerCase().includes(q) ||
+            t.description?.toLowerCase().includes(q)
+          );
+        }).length;
+      }
+    }
+
+    if (!rawItems) {
+      return { all: 0, note: 0, reminder: 0, list: 0, teams: teamsCount };
+    }
+
+    const itemMatches = (item: (typeof rawItems)[number]) => {
+      if (tag && !item.tags.includes(tag)) return false;
+      if (!q) return true;
+      const matchesTitle = item.title.toLowerCase().includes(q);
+      const matchesContent = item.content.toLowerCase().includes(q);
+      const matchesTag = item.tags.some((t) => t.toLowerCase().includes(q));
+      const matchesChecklist = item.checklist?.some((ci) =>
+        ci.text.toLowerCase().includes(q)
+      );
+      return matchesTitle || matchesContent || matchesTag || matchesChecklist;
+    };
+
+    const notesCount = rawItems.filter((i) => i.type === "note" && itemMatches(i)).length;
+    const listsCount = rawItems.filter((i) => i.type === "list" && itemMatches(i)).length;
+    const remindersCount =
+      reminderCounts !== undefined
+        ? reminderCounts.total
+        : rawItems.filter((i) => i.type === "reminder" && itemMatches(i)).length;
+
+    const allCount = notesCount + listsCount + remindersCount;
+
     return {
-      all: rawItems.length,
-      note: rawItems.filter((i) => i.type === "note").length,
-      reminder: rawItems.filter((i) => i.type === "reminder").length,
-      list: rawItems.filter((i) => i.type === "list").length,
+      all: allCount,
+      note: notesCount,
+      reminder: remindersCount,
+      list: listsCount,
       teams: teamsCount,
     };
-  }, [rawItems, myTeams]);
+  }, [rawItems, myTeams, searchQuery, selectedTag, reminderCounts]);
 
   // Pinned non-reminders (notes & lists)
   const pinnedNonReminders = useMemo(
@@ -427,6 +482,30 @@ export default function DashboardPage() {
     activeUser?.email?.charAt(0).toUpperCase() ||
     "U";
 
+  // Dynamic search placeholder synchronized with active category tab and team context
+  const [teamContextState, setTeamContextState] = useState<{
+    teamName: string | null;
+    subTab: string;
+  }>({ teamName: null, subTab: "reminders" });
+
+  const searchPlaceholder = useMemo(() => {
+    if (activeTab === "reminder") return "Search personal reminders...";
+    if (activeTab === "note") return "Search notes...";
+    if (activeTab === "list") return "Search lists...";
+    if (activeTab === "teams") {
+      if (teamContextState.teamName) {
+        if (teamContextState.subTab === "reminders") {
+          return `Search ${teamContextState.teamName} reminders...`;
+        }
+        if (teamContextState.subTab === "members") {
+          return "Search team members...";
+        }
+      }
+      return "Search teams...";
+    }
+    return "Search all personal items...";
+  }, [activeTab, teamContextState]);
+
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
@@ -543,6 +622,7 @@ export default function DashboardPage() {
             availableTags={availableTags}
             selectedTag={selectedTag}
             onTagSelect={setSelectedTag}
+            searchPlaceholder={searchPlaceholder}
           />
         </section>
 
@@ -563,6 +643,9 @@ export default function DashboardPage() {
               user={user}
               currentTime={currentTime}
               onEditItem={setEditingItem}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              onTeamStateChange={setTeamContextState}
             />
           ) : null
         ) : activeTab === "reminder" ? (
@@ -574,6 +657,7 @@ export default function DashboardPage() {
               searchQuery={searchQuery}
               selectedTag={selectedTag}
               onEdit={setEditingItem}
+              onClearSearch={() => setSearchQuery("")}
             />
           ) : null
         ) : (
@@ -589,6 +673,7 @@ export default function DashboardPage() {
                 onEdit={setEditingItem}
                 title="Reminders"
                 hideIfEmpty={true}
+                onClearSearch={() => setSearchQuery("")}
               />
             )}
 
@@ -693,6 +778,18 @@ export default function DashboardPage() {
                     ? "Try adjusting your search terms or clearing selected tags."
                     : `Click the microphone button above to record your voice or type text to create a ${activeTab}.`}
                 </p>
+                {(searchQuery || selectedTag) && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setSearchQuery("");
+                      setSelectedTag(null);
+                    }}
+                    className="mt-4 gap-1.5 text-xs rounded-xl cursor-pointer"
+                  >
+                    Clear Filter
+                  </Button>
+                )}
               </div>
             )}
 

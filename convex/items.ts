@@ -715,7 +715,15 @@ export const getReminderCounts = query({
         const matchesChecklist = r.checklist?.some((ci) =>
           ci.text.toLowerCase().includes(queryFilter)
         );
-        if (!matchesTitle && !matchesContent && !matchesTag && !matchesChecklist) continue;
+        const matchesCreator = r.creatorName?.toLowerCase().includes(queryFilter);
+        if (
+          !matchesTitle &&
+          !matchesContent &&
+          !matchesTag &&
+          !matchesChecklist &&
+          !matchesCreator
+        )
+          continue;
       }
 
       if (r.reminderStatus === "completed") {
@@ -792,7 +800,15 @@ export const getRemindersByTab = query({
         const matchesChecklist = r.checklist?.some((ci) =>
           ci.text.toLowerCase().includes(queryFilter)
         );
-        if (!matchesTitle && !matchesContent && !matchesTag && !matchesChecklist) return false;
+        const matchesCreator = r.creatorName?.toLowerCase().includes(queryFilter);
+        if (
+          !matchesTitle &&
+          !matchesContent &&
+          !matchesTag &&
+          !matchesChecklist &&
+          !matchesCreator
+        )
+          return false;
       }
       return true;
     });
