@@ -4,7 +4,7 @@ const nextConfig: NextConfig = {
   /* config options here */
   allowedDevOrigins: ["192.168.200.33"],
 
-  // allowedDevOrigins: ["10.166.75.143"],
+  // allowedDevOrigins: ["10.46.132.143"],
 
   experimental: {
     agentFeedback: true,

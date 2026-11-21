@@ -253,3 +253,14 @@ export const removeExpiredEndpoints = internalMutation({
     }
   },
 });
+
+/**
+ * Resets notification flag if push dispatch failed or had no subscriptions,
+ * allowing safety cron or active client to re-attempt delivery.
+ */
+export const internalResetNotificationStatus = internalMutation({
+  args: { itemId: v.id("items") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.itemId, { isNotified: false });
+  },
+});

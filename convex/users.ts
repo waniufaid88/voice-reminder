@@ -147,3 +147,5 @@ export const getProfile = query({
   },
 });
 
+export { requestReset, validateToken, resetPassword } from "./passwordReset";
+

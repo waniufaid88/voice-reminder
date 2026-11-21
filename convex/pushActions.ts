@@ -85,6 +85,11 @@ export const dispatchPushAction = internalAction({
 
       if (!subscriptions || subscriptions.length === 0) {
         console.log(`[pushActions] No active push subscriptions found for reminder ${item._id}`);
+        // Reset isNotified to false so safety cron or next client sync can deliver the notification
+        await ctx.runMutation(
+          internal.notifications.internalResetNotificationStatus,
+          { itemId: item._id }
+        );
         return;
       }
 

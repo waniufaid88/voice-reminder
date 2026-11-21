@@ -16,6 +16,7 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  Loader2,
 } from "lucide-react";
 
 import { api } from "@/convex/_generated/api";
@@ -135,6 +136,7 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isSnoozeOpen, setIsSnoozeOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isTogglingReminder, setIsTogglingReminder] = useState(false);
   const [isContentExpanded, setIsContentExpanded] = useState(false);
   const [isChecklistExpanded, setIsChecklistExpanded] = useState(false);
 
@@ -193,15 +195,31 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
   };
 
   const handleToggleReminder = async () => {
-    const res = await toggleReminderStatus({ itemId: item._id });
-    if (res?.isRecurringAdvanced) {
-      toast.success(
-        `Completed for today! Next: ${formatReadableDueDate(res.nextDue)} 🔁`
-      );
-    } else {
-      toast.success(
-        isCompletedReminder ? "Restored reminder" : "Reminder completed! 🎉"
-      );
+    if (isTogglingReminder) return;
+    setIsTogglingReminder(true);
+    const targetStatus = isCompletedReminder ? "pending" : "completed";
+    try {
+      const res = await toggleReminderStatus({
+        itemId: item._id,
+        targetStatus,
+      });
+      if (res?.isRecurringAdvanced) {
+        toast.success(
+          `Completed for today! Next: ${formatReadableDueDate(res.nextDue)} 🔁`
+        );
+      } else {
+        toast.success(
+          targetStatus === "pending"
+            ? "Restored reminder"
+            : "Reminder completed! 🎉"
+        );
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to update reminder";
+      toast.error(msg);
+    } finally {
+      setIsTogglingReminder(false);
     }
   };
 
@@ -429,14 +447,19 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
               <Button
                 type="button"
                 size="sm"
+                disabled={isTogglingReminder}
                 onClick={handleToggleReminder}
                 className={
                   isCompletedReminder
-                    ? "bg-zinc-200 text-zinc-700 hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-300 text-xs rounded-xl h-8 px-3"
+                    ? "bg-zinc-200 text-zinc-700 hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-300 text-xs rounded-xl h-8 px-3 cursor-pointer"
                     : "bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-xl h-8 px-3.5 shadow-sm shadow-emerald-600/20 cursor-pointer"
                 }
               >
-                <Check className="h-3.5 w-3.5 mr-1" />
+                {isTogglingReminder ? (
+                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                ) : (
+                  <Check className="h-3.5 w-3.5 mr-1" />
+                )}
                 {isCompletedReminder
                   ? "Undo"
                   : item.recurrenceMode === "daily" || item.isDaily

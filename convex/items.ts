@@ -391,19 +391,34 @@ export const toggleChecklistItem = mutation({
 });
 
 export const toggleReminderStatus = mutation({
-  args: { itemId: v.id("items") },
+  args: {
+    itemId: v.id("items"),
+    targetStatus: v.optional(v.union(v.literal("pending"), v.literal("completed"))),
+  },
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
     if (!item) throw new Error("Item not found");
 
+    const currentStatus = item.reminderStatus || "pending";
+
+    // If explicit targetStatus matches current status and not recurring advancement, return immediately (prevents duplicate rapid clicks)
     const isRecurring =
       item.recurrenceMode === "daily" ||
       item.recurrenceMode === "custom" ||
-      item.isDaily;
+      Boolean(item.isDaily);
 
-    // If it's a recurring reminder and currently pending:
+    if (args.targetStatus && currentStatus === args.targetStatus && !isRecurring) {
+      return { isRecurringAdvanced: false, status: currentStatus };
+    }
+
+    // If it's a recurring reminder and being marked done/completed:
     // Completing it for today advances the scheduled dueDate to the next occurrence
-    if (isRecurring && item.reminderStatus === "pending" && item.dueDate) {
+    if (
+      isRecurring &&
+      currentStatus !== "completed" &&
+      (args.targetStatus === undefined || args.targetStatus === "completed") &&
+      item.dueDate
+    ) {
       const now = Date.now();
       let nextDueDate = item.dueDate + 24 * 60 * 60 * 1000;
 
@@ -413,17 +428,33 @@ export const toggleReminderStatus = mutation({
         item.recurrenceDays.length > 0
       ) {
         const days = item.recurrenceDays;
-        // Advance in 24-hour day increments to preserve the exact local time without server timezone distortion
-        for (let dayOffset = 1; dayOffset <= 7; dayOffset++) {
+        let dayOffset = 1;
+        let found = false;
+        // Search ahead up to 14 days to find the next scheduled day strictly in the future
+        while (dayOffset <= 14) {
           const candidateMs = item.dueDate + dayOffset * 24 * 60 * 60 * 1000;
           const candidateDayOfWeek = new Date(candidateMs).getDay();
           if (days.includes(candidateDayOfWeek) && candidateMs > now) {
             nextDueDate = candidateMs;
+            found = true;
             break;
+          }
+          dayOffset++;
+        }
+        // If dueDate was far in the past, align with local time-of-day today/tomorrow
+        if (!found) {
+          const origDate = new Date(item.dueDate);
+          for (let d = 1; d <= 7; d++) {
+            const future = new Date(now + d * 24 * 60 * 60 * 1000);
+            future.setHours(origDate.getHours(), origDate.getMinutes(), 0, 0);
+            if (days.includes(future.getDay()) && future.getTime() > now) {
+              nextDueDate = future.getTime();
+              break;
+            }
           }
         }
       } else {
-        // Daily reminder: advance by 24h increments until in the future
+        // Daily reminder: advance by 24h increments until strictly in the future
         while (nextDueDate <= now) {
           nextDueDate += 24 * 60 * 60 * 1000;
         }
@@ -461,11 +492,17 @@ export const toggleReminderStatus = mutation({
       return { isRecurringAdvanced: true, nextDue: nextDueDate };
     }
 
-    const newStatus = item.reminderStatus === "completed" ? "pending" : "completed";
+    const newStatus =
+      args.targetStatus !== undefined
+        ? args.targetStatus
+        : currentStatus === "completed"
+          ? "pending"
+          : "completed";
+
     if (item.scheduledJobId) {
       try {
         await ctx.scheduler.cancel(item.scheduledJobId);
-      } catch { }
+      } catch {}
     }
 
     let scheduledJobId: any = undefined;

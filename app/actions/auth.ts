@@ -13,6 +13,8 @@ import {
   deleteSessionCookie,
   SESSION_MAX_AGE_SECONDS,
 } from "@/lib/session";
+import { headers } from "next/headers";
+import { sendPasswordResetEmail } from "@/lib/mailer";
 
 export interface AuthResponse {
   success: boolean;
@@ -148,6 +150,114 @@ export async function getCurrentUserAction() {
     return result?.user ?? null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Handles requesting a password reset email.
+ * Applies rate limiting via Convex and dispatches email with secure reset link.
+ */
+export async function forgotPasswordAction(
+  email: string
+): Promise<{ success: boolean; message: string; rateLimited?: boolean }> {
+  const trimmedEmail = email?.trim().toLowerCase();
+  if (!trimmedEmail || !trimmedEmail.includes("@")) {
+    return {
+      success: false,
+      message: "Please enter a valid email address.",
+    };
+  }
+
+  try {
+    const res = await convexServer.mutation(api.passwordReset.requestReset, {
+      email: trimmedEmail,
+    });
+
+    if (res.userFound && res.token) {
+      const headersList = await headers();
+      const host = headersList.get("host") || "localhost:3000";
+      const proto = headersList.get("x-forwarded-proto") || "http";
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `${proto}://${host}`;
+      const resetUrl = `${baseUrl}/reset-password?token=${res.token}`;
+
+      await sendPasswordResetEmail({
+        to: res.email || trimmedEmail,
+        name: res.name || "User",
+        resetUrl,
+      });
+    }
+
+    return {
+      success: true,
+      message:
+        "If an account is associated with this email, we have sent a secure password reset link. Please check your inbox.",
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to process request.";
+    const isRateLimit = msg.toLowerCase().includes("too many password reset requests");
+    return {
+      success: false,
+      message: msg,
+      rateLimited: isRateLimit,
+    };
+  }
+}
+
+/**
+ * Validates a password reset token from URL query string.
+ */
+export async function validateResetTokenAction(
+  token: string
+): Promise<{ valid: boolean; email?: string; error?: string }> {
+  if (!token || !token.trim()) {
+    return { valid: false, error: "Missing reset token." };
+  }
+
+  try {
+    const res = await convexServer.query(api.passwordReset.validateToken, {
+      token: token.trim(),
+    });
+    return res;
+  } catch {
+    return { valid: false, error: "Failed to validate reset token." };
+  }
+}
+
+/**
+ * Resets user's password using the verified reset token.
+ */
+export async function resetPasswordAction(
+  token: string,
+  newPassword: string
+): Promise<{ success: boolean; message: string }> {
+  if (!token || !token.trim()) {
+    return { success: false, message: "Missing reset token." };
+  }
+
+  if (!newPassword || newPassword.length < 6) {
+    return {
+      success: false,
+      message: "Password must be at least 6 characters long.",
+    };
+  }
+
+  try {
+    const newPasswordHash = await hashPassword(newPassword);
+    await convexServer.mutation(api.passwordReset.resetPassword, {
+      token: token.trim(),
+      newPasswordHash,
+    });
+
+    return {
+      success: true,
+      message: "Your password has been reset successfully! You can now sign in.",
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to reset password.";
+    return {
+      success: false,
+      message: msg,
+    };
   }
 }
 

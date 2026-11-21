@@ -137,14 +137,27 @@ export default function DashboardPage() {
     async function checkAuth() {
       const currentUser = await getCurrentUserAction();
       if (!currentUser) {
-        router.push("/login");
+        setIsMobileMoreOpen(false);
+        setIsProfileImageViewerOpen(false);
+        setIsEditProfileOpen(false);
+        window.location.href = "/login";
       } else {
         setUser(currentUser);
+        setIsMobileMoreOpen(false);
+        setIsProfileImageViewerOpen(false);
+        setIsEditProfileOpen(false);
       }
       setAuthLoading(false);
     }
     checkAuth();
   }, [router]);
+
+  // Ensure all dialogs and modals start closed when user changes or session initializes
+  useEffect(() => {
+    setIsMobileMoreOpen(false);
+    setIsProfileImageViewerOpen(false);
+    setIsEditProfileOpen(false);
+  }, [user?._id]);
 
   // Real-time items subscription for authenticated user
   const rawItems = useQuery(
@@ -298,9 +311,12 @@ export default function DashboardPage() {
   };
 
   const handleLogout = async () => {
+    setIsMobileMoreOpen(false);
+    setIsProfileImageViewerOpen(false);
+    setIsEditProfileOpen(false);
     await logoutAction();
     toast.success("Signed out successfully");
-    router.push("/login");
+    window.location.href = "/login";
   };
 
   const handleProfileFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -447,8 +463,34 @@ export default function DashboardPage() {
           </div>
 
           {/* User profile picture & actions */}
-          <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-2.5">
             <ThemeToggle className="hidden md:inline-flex" />
+
+            {/* Desktop: Account details button (Teams, Profile, Settings) */}
+            {activeUser && (
+              <button
+                type="button"
+                onClick={() => setIsMobileMoreOpen(true)}
+                className="hidden md:inline-flex items-center gap-1.5 rounded-xl border border-zinc-200/80 dark:border-white/[0.08] bg-zinc-100/70 hover:bg-zinc-200/80 dark:bg-zinc-800/60 dark:hover:bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-200 transition-colors cursor-pointer shadow-2xs"
+                title="Account Settings & Teams"
+              >
+                <Users className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
+                <span>Account</span>
+              </button>
+            )}
+
+            {/* Desktop: Sign out button */}
+            {activeUser && (
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="hidden md:inline-flex items-center gap-1.5 rounded-xl border border-rose-200/80 dark:border-rose-900/40 bg-rose-50/70 hover:bg-rose-100 dark:bg-rose-950/30 dark:hover:bg-rose-950/60 px-3 py-1.5 text-xs font-semibold text-rose-600 dark:text-rose-400 transition-colors cursor-pointer shadow-2xs"
+                title="Sign out of your account"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                <span>Sign out</span>
+              </button>
+            )}
 
             {/* Header: Profile picture only. When clicked, display full profile image only */}
             {activeUser && (

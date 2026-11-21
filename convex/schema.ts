@@ -127,5 +127,16 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_endpoint", ["endpoint"]),
+
+  passwordResetTokens: defineTable({
+    email: v.string(),
+    token: v.string(),
+    expiresAt: v.number(),
+    usedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_email", ["email"])
+    .index("by_email_createdAt", ["email", "createdAt"]),
 });
 

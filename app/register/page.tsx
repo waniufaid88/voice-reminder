@@ -60,8 +60,7 @@ function RegisterForm() {
       setIsLoading(false);
     } else {
       toast.success("Account created! Welcome, " + (result.user?.name || "") + "!");
-      router.push(redirectUrl);
-      router.refresh();
+      window.location.href = redirectUrl;
     }
   }
 

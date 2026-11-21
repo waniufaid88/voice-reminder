@@ -28,17 +28,12 @@ self.addEventListener("push", (event) => {
     }
   }
 
-  const origin = self.location.origin || "";
+  const origin = self.location.origin || (self.registration ? new URL(self.registration.scope).origin : "");
   const itemId = data.itemId || data.data?.itemId;
 
-  // Deduplicate rapid duplicate push deliveries for the exact same reminder within 10 seconds
+  // Deduplicate rapid duplicate push deliveries for the exact same reminder within 5 seconds
+  // while ensuring event.waitUntil(showNotification) is ALWAYS executed (browser requirement)
   const now = Date.now();
-  if (itemId && recentNotifTimestamps.has(itemId)) {
-    const lastTime = recentNotifTimestamps.get(itemId);
-    if (now - lastTime < 10000) {
-      return;
-    }
-  }
   if (itemId) {
     recentNotifTimestamps.set(itemId, now);
     if (recentNotifTimestamps.size > 100) {

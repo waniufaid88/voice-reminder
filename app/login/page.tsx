@@ -35,6 +35,7 @@ function LoginForm() {
   const initialEmail = searchParams.get("email") || "";
 
   const [isLoading, setIsLoading] = useState(false);
+  const [hasLoginError, setHasLoginError] = useState(false);
 
   const form = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
@@ -54,13 +55,14 @@ function LoginForm() {
     const result = await loginAction(formData);
 
     if (!result.success) {
+      setHasLoginError(true);
       toast.error(result.error || "Failed to log in.");
+      setIsLoading(false);
     } else {
+      setHasLoginError(false);
       toast.success("Welcome back, " + (result.user?.name || "User") + "!");
-      router.push(redirectUrl);
-      router.refresh();
+      window.location.href = redirectUrl;
     }
-    setIsLoading(false);
   }
 
   return (
@@ -135,6 +137,16 @@ function LoginForm() {
                       />
                     </FormControl>
                     <FormMessage />
+                    {hasLoginError && (
+                      <div className="pt-1 text-right">
+                        <Link
+                          href={`/forgot-password?email=${encodeURIComponent(form.getValues("email") || "")}`}
+                          className="text-xs font-semibold text-purple-600 hover:text-purple-500 dark:text-purple-400 hover:underline animate-in fade-in"
+                        >
+                          Forgot password?
+                        </Link>
+                      </div>
+                    )}
                   </FormItem>
                 )}
               />

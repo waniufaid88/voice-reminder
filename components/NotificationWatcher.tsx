@@ -31,6 +31,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
   } | null>(null);
 
   const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
+  const [isMarkingDone, setIsMarkingDone] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<
     NotificationPermission | "unsupported"
   >("default");
@@ -455,10 +456,14 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
    * Action handler: Mark Done / Done for Today
    */
   const handleMarkDone = async () => {
-    if (!alertingItem) return;
+    if (!alertingItem || isMarkingDone) return;
+    setIsMarkingDone(true);
     stopAlarm();
     try {
-      const res = await toggleReminderStatus({ itemId: alertingItem._id });
+      const res = await toggleReminderStatus({
+        itemId: alertingItem._id,
+        targetStatus: "completed",
+      });
       if (res?.isRecurringAdvanced) {
         toast.success("Completed for today! Repeated schedule updated 🔁");
       } else {
@@ -467,6 +472,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
     } catch {
       toast.error("Failed to mark reminder done");
     } finally {
+      setIsMarkingDone(false);
       setAlertingItem(null);
     }
   };
@@ -652,10 +658,15 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
 
                 <button
                   type="button"
+                  disabled={isMarkingDone}
                   onClick={handleMarkDone}
-                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500 transition-colors"
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500 transition-colors disabled:opacity-50 cursor-pointer"
                 >
-                  {alertingItem.isRecurring ? "✓ Done for Today" : "✓ Mark Done"}
+                  {isMarkingDone
+                    ? "Updating..."
+                    : alertingItem.isRecurring
+                      ? "✓ Done for Today"
+                      : "✓ Mark Done"}
                 </button>
 
                 {alertingItem.isRecurring && (
