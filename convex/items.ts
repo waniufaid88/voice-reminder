@@ -16,6 +16,13 @@ export const getAudioUrl = query({
   },
 });
 
+export const getById = query({
+  args: { itemId: v.id("items") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.itemId);
+  },
+});
+
 export const listByUser = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
@@ -74,7 +81,8 @@ export const listActiveReminders = query({
         if (
           tr.reminderStatus === "pending" &&
           !tr.isNotified &&
-          tr.dueDate !== undefined
+          tr.dueDate !== undefined &&
+          !tr.deletedByUserIds?.includes(args.userId)
         ) {
           if (!activeList.some((item) => item._id === tr._id)) {
             activeList.push(tr);
@@ -611,13 +619,40 @@ export const deleteItem = mutation({
 
     // Permission enforcement:
     // Personal reminders: only creator can delete
-    // Team reminders: reminder creator, team admin, and team owner can delete
+    // Team reminders:
+    // - If completed or overdue: any team member can delete it strictly for themselves (per-user dismissal)
+    // - If upcoming: reminder creator, team admin, and team owner can delete for the team
     if (args.userId) {
       if (!item.teamId) {
         if (item.userId !== args.userId) {
           throw new Error("Only the creator can delete this personal reminder.");
         }
       } else {
+        const isCompleted = item.reminderStatus === "completed";
+        const isOverdue = Boolean(item.dueDate && item.dueDate < Date.now());
+
+        // Any team member can delete their own completed or overdue reminder in teams
+        if (isCompleted || isOverdue) {
+          const membership = await ctx.db
+            .query("teamMembers")
+            .withIndex("by_teamId_userId", (q) =>
+              q.eq("teamId", item.teamId!).eq("userId", args.userId!)
+            )
+            .first();
+
+          if (!membership) {
+            throw new Error("You are not a member of this team.");
+          }
+
+          const currentDeleted = item.deletedByUserIds || [];
+          if (!currentDeleted.includes(args.userId)) {
+            await ctx.db.patch(args.itemId, {
+              deletedByUserIds: [...currentDeleted, args.userId],
+            });
+          }
+          return;
+        }
+
         const isCreator = item.userId === args.userId;
         let isAuthorized = isCreator;
 
@@ -689,6 +724,7 @@ export const getReminderCounts = query({
           q.eq("teamId", args.teamId!).eq("type", "reminder")
         )
         .collect();
+      reminders = reminders.filter((r) => !r.deletedByUserIds?.includes(args.userId));
     } else {
       const allUserReminders = await ctx.db
         .query("items")
@@ -778,6 +814,7 @@ export const getRemindersByTab = query({
           q.eq("teamId", args.teamId!).eq("type", "reminder")
         )
         .collect();
+      reminders = reminders.filter((r) => !r.deletedByUserIds?.includes(args.userId));
     } else {
       const allUserReminders = await ctx.db
         .query("items")

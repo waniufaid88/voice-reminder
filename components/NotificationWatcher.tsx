@@ -28,6 +28,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
     content: string;
     isRecurring: boolean;
     recurrenceMode?: "once" | "daily" | "custom";
+    teamId?: Id<"teams">;
   } | null>(null);
 
   const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
@@ -363,6 +364,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
             content: item.content,
             isRecurring,
             recurrenceMode: item.recurrenceMode,
+            teamId: item.teamId,
           });
 
           // Show browser notification if permission granted (mobile Android Chrome requires ServiceWorker)
@@ -385,8 +387,11 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
               silent: false,
               vibrate: [500, 250, 500, 250, 500, 250, 500],
               data: {
-                url: "/",
+                url: item.teamId
+                  ? `/?teamId=${item.teamId}&reminderId=${item._id}`
+                  : `/?reminderId=${item._id}`,
                 itemId: item._id,
+                teamId: item.teamId,
               },
             };
 
@@ -397,12 +402,28 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
                 })
                 .catch(() => {
                   try {
-                    new Notification(notifTitle, notifOptions);
+                    const n = new Notification(notifTitle, notifOptions);
+                    n.onclick = () => {
+                      window.focus();
+                      window.dispatchEvent(
+                        new CustomEvent("navigateToReminder", {
+                          detail: { itemId: item._id, teamId: item.teamId },
+                        })
+                      );
+                    };
                   } catch {}
                 });
             } else {
               try {
-                new Notification(notifTitle, notifOptions);
+                const n = new Notification(notifTitle, notifOptions);
+                n.onclick = () => {
+                  window.focus();
+                  window.dispatchEvent(
+                    new CustomEvent("navigateToReminder", {
+                      detail: { itemId: item._id, teamId: item.teamId },
+                    })
+                  );
+                };
               } catch {}
             }
           }
@@ -441,6 +462,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
             title: event.data.title || "Reminder",
             content: event.data.content || "",
             isRecurring: false,
+            teamId: event.data.teamId as Id<"teams"> | undefined,
           });
         }
       }
@@ -622,27 +644,39 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
             </div>
 
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <h4 className="text-sm font-bold text-amber-950 dark:text-amber-100 truncate">
-                  Reminder: {alertingItem.title}
-                </h4>
-                {alertingItem.isRecurring && (
-                  <span className="rounded-md bg-amber-200/80 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900 dark:bg-amber-900/80 dark:text-amber-200">
-                    🔁 Recurring
-                  </span>
-                )}
-                {isAlarmPlaying && (
-                  <span className="rounded-md bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700 animate-pulse dark:bg-red-950 dark:text-red-300">
-                    Alarm Playing (15s)
-                  </span>
+              <div
+                className="cursor-pointer"
+                onClick={() => {
+                  window.dispatchEvent(
+                    new CustomEvent("navigateToReminder", {
+                      detail: { itemId: alertingItem._id, teamId: alertingItem.teamId },
+                    })
+                  );
+                }}
+                title="Click to view and highlight reminder"
+              >
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <h4 className="text-sm font-bold text-amber-950 dark:text-amber-100 truncate hover:underline">
+                    Reminder: {alertingItem.title}
+                  </h4>
+                  {alertingItem.isRecurring && (
+                    <span className="rounded-md bg-amber-200/80 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900 dark:bg-amber-900/80 dark:text-amber-200">
+                      🔁 Recurring
+                    </span>
+                  )}
+                  {isAlarmPlaying && (
+                    <span className="rounded-md bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700 animate-pulse dark:bg-red-950 dark:text-red-300">
+                      Alarm Playing (15s)
+                    </span>
+                  )}
+                </div>
+
+                {alertingItem.content && (
+                  <p className="mt-1 text-xs text-amber-800 dark:text-amber-300 line-clamp-2">
+                    {alertingItem.content}
+                  </p>
                 )}
               </div>
-
-              {alertingItem.content && (
-                <p className="mt-1 text-xs text-amber-800 dark:text-amber-300 line-clamp-2">
-                  {alertingItem.content}
-                </p>
-              )}
 
               {/* Action buttons: Silence, Mark Done, Snooze, Dismiss */}
               <div className="mt-3 flex flex-wrap items-center gap-1.5">

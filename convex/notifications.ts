@@ -89,18 +89,21 @@ export const internalGetSubscriptionsByUser = internalQuery({
 /**
  * Helper to fetch unique push subscriptions for all active members of a team.
  */
-async function getTeamSubscriptionsHelper(ctx: any, teamId: any) {
+async function getTeamSubscriptionsHelper(ctx: any, teamId: any, excludedUserIds?: string[]) {
   const team = await ctx.db.get(teamId);
   const members = await ctx.db
     .query("teamMembers")
     .withIndex("by_teamId", (q: any) => q.eq("teamId", teamId))
     .collect();
 
+  const excluded = new Set(excludedUserIds || []);
   const userIds = new Set<string>();
   for (const m of members) {
-    userIds.add(m.userId);
+    if (!excluded.has(m.userId)) {
+      userIds.add(m.userId);
+    }
   }
-  if (team?.createdById) {
+  if (team?.createdById && !excluded.has(team.createdById)) {
     userIds.add(team.createdById);
   }
 
@@ -142,9 +145,12 @@ export const getSubscriptionsForTeam = query({
  * Gets active push subscriptions for all members of a team (internal query).
  */
 export const internalGetSubscriptionsForTeam = internalQuery({
-  args: { teamId: v.id("teams") },
+  args: {
+    teamId: v.id("teams"),
+    excludedUserIds: v.optional(v.array(v.id("users"))),
+  },
   handler: async (ctx, args) => {
-    return await getTeamSubscriptionsHelper(ctx, args.teamId);
+    return await getTeamSubscriptionsHelper(ctx, args.teamId, args.excludedUserIds);
   },
 });
 

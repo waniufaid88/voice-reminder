@@ -30,6 +30,8 @@ self.addEventListener("push", (event) => {
 
   const origin = self.location.origin || (self.registration ? new URL(self.registration.scope).origin : "");
   const itemId = data.itemId || data.data?.itemId;
+  const teamId = data.teamId || data.data?.teamId;
+  const targetUrl = data.url || (itemId ? `/?reminderId=${itemId}${teamId ? `&teamId=${teamId}` : ""}` : "/");
 
   // Deduplicate rapid duplicate push deliveries for the exact same reminder within 5 seconds
   // while ensuring event.waitUntil(showNotification) is ALWAYS executed (browser requirement)
@@ -58,8 +60,9 @@ self.addEventListener("push", (event) => {
     silent: false,
     vibrate: [500, 250, 500, 250, 500, 250, 500],
     data: {
-      url: data.url || "/",
+      url: targetUrl,
       itemId,
+      teamId,
       title: data.title,
       content: data.body,
       receivedAt: Date.now(),
@@ -87,8 +90,9 @@ self.addEventListener("push", (event) => {
         badge: badgeUrl,
         tag,
         data: {
-          url: data.url || "/",
+          url: targetUrl,
           itemId,
+          teamId,
         },
       });
     });
@@ -101,6 +105,7 @@ self.addEventListener("push", (event) => {
           client.postMessage({
             type: "PUSH_REMINDER_NOTIFICATION",
             itemId,
+            teamId,
             title: data.title,
             content: data.body,
           });
@@ -120,6 +125,7 @@ self.addEventListener("notificationclick", (event) => {
   const action = event.action;
   const data = notification.data || {};
   const itemId = data.itemId;
+  const teamId = data.teamId;
 
   notification.close();
 
@@ -152,12 +158,19 @@ self.addEventListener("notificationclick", (event) => {
     return;
   }
 
-  // Clicked notification body -> open / focus website tab
-  const targetUrl = data.url || "/";
+  // Clicked notification body -> open / focus website tab and navigate to reminder
+  const targetUrl = data.url || (itemId ? `/?reminderId=${itemId}${teamId ? `&teamId=${teamId}` : ""}` : "/");
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windowClients) => {
       for (const client of windowClients) {
         if ("focus" in client) {
+          try {
+            client.postMessage({
+              type: "NAVIGATE_TO_REMINDER",
+              itemId,
+              teamId,
+            });
+          } catch {}
           return client.focus();
         }
       }

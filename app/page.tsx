@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import toast from "react-hot-toast";
@@ -72,6 +72,70 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<ItemRecord | null>(null);
+
+  // Targeted reminder for notification navigation & pulsing highlight
+  const [targetReminderId, setTargetReminderId] = useState<string | null>(null);
+  const [targetTeamId, setTargetTeamId] = useState<Id<"teams"> | null>(null);
+
+  const navigateToReminder = useCallback((itemId: string, teamId?: string | null) => {
+    setTargetReminderId(itemId);
+    if (teamId) {
+      setTargetTeamId(teamId as Id<"teams">);
+      setActiveTab("teams");
+    } else {
+      setTargetTeamId(null);
+      setActiveTab("reminder");
+    }
+  }, []);
+
+  // Listen for notification navigation from Service Worker, in-app banner, or URL query parameters
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // 1. Initial URL parameters check (?reminderId=...&teamId=...)
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const reminderId = params.get("reminderId");
+      const teamId = params.get("teamId");
+      if (reminderId) {
+        navigateToReminder(reminderId, teamId);
+        // Clean URL to prevent re-triggering on manual refresh
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, "", newUrl);
+      }
+    } catch {}
+
+    // 2. Service Worker push message listener
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data?.type === "NAVIGATE_TO_REMINDER") {
+        const { itemId, teamId } = event.data;
+        if (itemId) {
+          navigateToReminder(itemId, teamId);
+        }
+      }
+    };
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", handleSwMessage);
+    }
+
+    // 3. Custom in-app event listener (e.g. from NotificationWatcher floating banner)
+    const handleCustomNav = (event: Event) => {
+      const customEvent = event as CustomEvent<{ itemId: string; teamId?: string | null }>;
+      if (customEvent.detail?.itemId) {
+        navigateToReminder(customEvent.detail.itemId, customEvent.detail.teamId);
+      }
+    };
+
+    window.addEventListener("navigateToReminder", handleCustomNav);
+
+    return () => {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.removeEventListener("message", handleSwMessage);
+      }
+      window.removeEventListener("navigateToReminder", handleCustomNav);
+    };
+  }, [navigateToReminder]);
 
   // Account Dialog (Mobile & Desktop)
   const [isMobileMoreOpen, setIsMobileMoreOpen] = useState(false);
@@ -646,6 +710,12 @@ export default function DashboardPage() {
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
               onTeamStateChange={setTeamContextState}
+              targetReminderId={targetReminderId}
+              targetTeamId={targetTeamId}
+              onTargetHandled={() => {
+                setTargetReminderId(null);
+                setTargetTeamId(null);
+              }}
             />
           ) : null
         ) : activeTab === "reminder" ? (
@@ -658,6 +728,8 @@ export default function DashboardPage() {
               selectedTag={selectedTag}
               onEdit={setEditingItem}
               onClearSearch={() => setSearchQuery("")}
+              targetReminderId={targetReminderId}
+              onTargetHandled={() => setTargetReminderId(null)}
             />
           ) : null
         ) : (
@@ -674,6 +746,8 @@ export default function DashboardPage() {
                 title="Reminders"
                 hideIfEmpty={true}
                 onClearSearch={() => setSearchQuery("")}
+                targetReminderId={targetReminderId}
+                onTargetHandled={() => setTargetReminderId(null)}
               />
             )}
 
@@ -690,6 +764,7 @@ export default function DashboardPage() {
                       item={item as ItemRecord}
                       currentUserId={user?._id}
                       onEdit={setEditingItem}
+                      isHighlighted={targetReminderId === item._id}
                     />
                   ))}
                 </div>
@@ -714,6 +789,7 @@ export default function DashboardPage() {
                       item={item as ItemRecord}
                       currentUserId={user?._id}
                       onEdit={setEditingItem}
+                      isHighlighted={targetReminderId === item._id}
                     />
                   ))}
                 </div>
@@ -756,6 +832,7 @@ export default function DashboardPage() {
                       item={item as ItemRecord}
                       currentUserId={user?._id}
                       onEdit={setEditingItem}
+                      isHighlighted={targetReminderId === item._id}
                     />
                   ))}
                 </div>

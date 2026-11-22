@@ -17,6 +17,8 @@ interface TabBasedReminderDashboardProps {
   title?: string;
   hideIfEmpty?: boolean;
   onClearSearch?: () => void;
+  targetReminderId?: string | null;
+  onTargetHandled?: () => void;
 }
 
 export function TabBasedReminderDashboard({
@@ -29,14 +31,64 @@ export function TabBasedReminderDashboard({
   title,
   hideIfEmpty = false,
   onClearSearch,
+  targetReminderId,
+  onTargetHandled,
 }: TabBasedReminderDashboardProps) {
   // 1. Dashboard Design: Default selection is Upcoming
   const [activeTab, setActiveTab] = useState<"upcoming" | "overdue" | "completed">("upcoming");
+
+  // Query target item details if specified (e.g. from notification click)
+  const targetItem = useQuery(
+    api.items.getById,
+    targetReminderId ? { itemId: targetReminderId as Id<"items"> } : "skip"
+  );
 
   // 5. Tab Switching: Each tab maintains its own independent pagination state
   const [upcomingLimit, setUpcomingLimit] = useState(5);
   const [overdueLimit, setOverdueLimit] = useState(5);
   const [completedLimit, setCompletedLimit] = useState(5);
+
+  // Automatically switch tab and expand limit when target item is resolved
+  useEffect(() => {
+    if (targetItem && targetItem.type === "reminder") {
+      const nowTime = currentTime > 0 ? currentTime : Date.now();
+      if (targetItem.reminderStatus === "completed") {
+        setActiveTab("completed");
+        setCompletedLimit((prev) => Math.max(prev, 25));
+      } else if (targetItem.dueDate !== undefined && targetItem.dueDate > nowTime) {
+        setActiveTab("upcoming");
+        setUpcomingLimit((prev) => Math.max(prev, 25));
+      } else {
+        setActiveTab("overdue");
+        setOverdueLimit((prev) => Math.max(prev, 25));
+      }
+    }
+  }, [targetItem, currentTime]);
+
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (targetReminderId) {
+      setHighlightedId(targetReminderId);
+
+      const scrollTimer = setTimeout(() => {
+        const el = document.getElementById(`item-${targetReminderId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 300);
+
+      const clearTimer = setTimeout(() => {
+        setHighlightedId(null);
+        if (onTargetHandled) onTargetHandled();
+      }, 3500);
+
+      return () => {
+        clearTimeout(scrollTimer);
+        clearTimeout(clearTimer);
+      };
+    }
+  }, [targetReminderId, activeTab, onTargetHandled]);
 
   const currentLimit =
     activeTab === "upcoming"
@@ -326,6 +378,7 @@ export function TabBasedReminderDashboard({
                   item={item as ItemRecord}
                   currentUserId={userId}
                   onEdit={onEdit}
+                  isHighlighted={highlightedId === item._id}
                 />
               ))}
             </div>

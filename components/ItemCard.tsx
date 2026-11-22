@@ -66,6 +66,7 @@ interface ItemCardProps {
   item: ItemRecord;
   currentUserId?: Id<"users"> | string | null;
   onEdit: (item: ItemRecord) => void;
+  isHighlighted?: boolean;
 }
 
 function formatCreatedDate(timestamp: number): string {
@@ -94,7 +95,7 @@ function formatCreatedDate(timestamp: number): string {
   }
 }
 
-export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
+export function ItemCard({ item, currentUserId, onEdit, isHighlighted }: ItemCardProps) {
   const togglePin = useMutation(api.items.togglePin);
   const deleteItem = useMutation(api.items.deleteItem);
   const toggleChecklistItem = useMutation(api.items.toggleChecklistItem);
@@ -109,40 +110,6 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
       ? { teamId: item.teamId, userId: currentUserId as Id<"users"> }
       : "skip"
   );
-
-  // Permission enforcement:
-  // Personal reminder: only creator can edit and delete
-  // Team reminder: creator, team admin, and team owner can edit and delete; other members are view-only
-  const isTeamItem = Boolean(item.teamId);
-  const isCreator = Boolean(
-    currentUserId && item.userId && String(item.userId) === String(currentUserId)
-  );
-  const isTeamAdminOrOwner =
-    userTeamRole === "owner" || userTeamRole === "admin";
-
-  const canEdit = !isTeamItem
-    ? (!item.userId || !currentUserId || isCreator)
-    : (isCreator || isTeamAdminOrOwner);
-
-  const canDelete = !isTeamItem
-    ? (!item.userId || !currentUserId || isCreator)
-    : (isCreator || isTeamAdminOrOwner);
-
-  const audioUrl = useQuery(
-    api.items.getAudioUrl,
-    item.audioStorageId ? { storageId: item.audioStorageId } : "skip"
-  );
-
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isSnoozeOpen, setIsSnoozeOpen] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [isTogglingReminder, setIsTogglingReminder] = useState(false);
-  const [isContentExpanded, setIsContentExpanded] = useState(false);
-  const [isChecklistExpanded, setIsChecklistExpanded] = useState(false);
-
-  // Quick checklist item addition
-  const [isAddingItem, setIsAddingItem] = useState(false);
-  const [newItemText, setNewItemText] = useState("");
 
   const [now, setNow] = useState(0);
 
@@ -159,6 +126,44 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
     item.type === "reminder" &&
     !isCompletedReminder &&
     Boolean(item.dueDate && now > 0 && item.dueDate < now);
+
+  // Permission enforcement:
+  // Personal reminder: only creator can edit and delete
+  // Team reminder:
+  // - If completed or overdue: any team member can delete it (removes it exclusively for their view)
+  // - If upcoming: creator, team admin, and team owner can edit and delete
+  const isTeamItem = Boolean(item.teamId);
+  const isCreator = Boolean(
+    currentUserId && item.userId && String(item.userId) === String(currentUserId)
+  );
+  const isTeamAdminOrOwner =
+    userTeamRole === "owner" || userTeamRole === "admin";
+
+  const isPerUserDelete = isTeamItem && (isCompletedReminder || isOverdue);
+
+  const canEdit = !isTeamItem
+    ? (!item.userId || !currentUserId || isCreator)
+    : (isCreator || isTeamAdminOrOwner);
+
+  const canDelete = !isTeamItem
+    ? (!item.userId || !currentUserId || isCreator)
+    : (isCreator || isTeamAdminOrOwner || isPerUserDelete);
+
+  const audioUrl = useQuery(
+    api.items.getAudioUrl,
+    item.audioStorageId ? { storageId: item.audioStorageId } : "skip"
+  );
+
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isSnoozeOpen, setIsSnoozeOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isTogglingReminder, setIsTogglingReminder] = useState(false);
+  const [isContentExpanded, setIsContentExpanded] = useState(false);
+  const [isChecklistExpanded, setIsChecklistExpanded] = useState(false);
+
+  // Quick checklist item addition
+  const [isAddingItem, setIsAddingItem] = useState(false);
+  const [newItemText, setNewItemText] = useState("");
 
   const completedCount =
     item.checklist?.filter((ci) => ci.completed).length || 0;
@@ -185,7 +190,11 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
         itemId: item._id,
         userId: currentUserId ? (currentUserId as Id<"users">) : undefined,
       });
-      toast.success("Item deleted");
+      if (isPerUserDelete) {
+        toast.success("Reminder removed from your view");
+      } else {
+        toast.success("Item deleted");
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete item";
       toast.error(msg);
@@ -261,7 +270,12 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
 
   return (
     <div
-      className={`group relative flex flex-col justify-between rounded-2xl border transition-all p-4 sm:p-5 shadow-xs hover:shadow-md ${
+      id={`item-${item._id}`}
+      className={`group relative flex flex-col justify-between rounded-2xl border transition-all duration-300 p-4 sm:p-5 shadow-xs hover:shadow-md ${
+        isHighlighted
+          ? "ring-4 ring-purple-500 shadow-xl shadow-purple-500/40 scale-[1.01] animate-pulse z-20"
+          : ""
+      } ${
         item.teamId ? "ring-1 ring-purple-500/25 dark:ring-purple-500/35 " : ""
       }${
         item.isPinned
@@ -380,14 +394,18 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
                           className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
                         >
                           <Trash2 className="h-3.5 w-3.5 text-rose-500" />
-                          <span>Delete</span>
+                          <span>{isPerUserDelete ? "Remove" : "Delete"}</span>
                         </button>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Delete this item?</AlertDialogTitle>
+                          <AlertDialogTitle>
+                            {isPerUserDelete ? "Remove this reminder?" : "Delete this item?"}
+                          </AlertDialogTitle>
                           <AlertDialogDescription>
-                            This will permanently delete &ldquo;{item.title}&rdquo;. This action cannot be undone.
+                            {isPerUserDelete
+                              ? `This will remove "${item.title}" from your view while remaining available for your teammates.`
+                              : `This will permanently delete "${item.title}". This action cannot be undone.`}
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
@@ -396,7 +414,11 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
                             onClick={handleConfirmDelete}
                             className="bg-rose-600 hover:bg-rose-700 text-white"
                           >
-                            {isDeleting ? "Deleting..." : "Yes, Delete"}
+                            {isDeleting
+                              ? "Removing..."
+                              : isPerUserDelete
+                                ? "Remove for Me"
+                                : "Yes, Delete"}
                           </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>
@@ -671,59 +693,6 @@ export function ItemCard({ item, currentUserId, onEdit }: ItemCardProps) {
             <p className="text-[11px] text-zinc-400 font-medium">
               Created: {formatCreatedDate(item.createdAt)}
             </p>
-
-            {/* Edit & Delete Action Buttons (matches Note Card in image) */}
-            {(canEdit || canDelete) && (
-              <div className="flex items-center gap-2 pt-1">
-                {canEdit && (
-                  <button
-                    type="button"
-                    onClick={() => onEdit(item)}
-                    className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:border-white/[0.08] dark:bg-[#232438] dark:text-zinc-200 dark:hover:bg-[#2d2e47] cursor-pointer transition-colors"
-                  >
-                    <Pencil className="h-3.5 w-3.5 text-zinc-400" />
-                    <span>Edit</span>
-                  </button>
-                )}
-
-                {canDelete && (
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex items-center gap-1.5 rounded-xl border border-zinc-200/80 bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-rose-50 hover:text-rose-600 dark:border-white/[0.08] dark:bg-[#232438] dark:text-zinc-300 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 cursor-pointer transition-colors"
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-rose-500" />
-                        <span>Delete</span>
-                      </button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete this note?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          This will permanently delete &ldquo;{item.title}&rdquo;.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={handleConfirmDelete}
-                          className="bg-rose-600 hover:bg-rose-700 text-white"
-                        >
-                          {isDeleting ? "Deleting..." : "Yes, Delete"}
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                )}
-              </div>
-            )}
-            {!canEdit && !canDelete && (
-              <div className="flex items-center gap-1.5 pt-1 text-[11px] text-zinc-400 dark:text-zinc-500 italic select-none">
-                <span>🔒</span>
-                <span>View only</span>
-              </div>
-            )}
           </div>
         )}
 

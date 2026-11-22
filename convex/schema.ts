@@ -61,6 +61,7 @@ export default defineSchema({
     // Team specific fields (optional: undefined for personal items)
     teamId: v.optional(v.id("teams")),
     creatorName: v.optional(v.string()),
+    deletedByUserIds: v.optional(v.array(v.id("users"))),
 
     createdAt: v.number(),
     updatedAt: v.number(),

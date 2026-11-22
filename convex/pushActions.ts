@@ -58,7 +58,7 @@ export const dispatchPushAction = internalAction({
       if (item.teamId) {
         const teamData = await ctx.runQuery(
           internal.notifications.internalGetSubscriptionsForTeam,
-          { teamId: item.teamId }
+          { teamId: item.teamId, excludedUserIds: item.deletedByUserIds }
         );
         subscriptions = teamData.subscriptions;
         notificationTitle = `⏰ [${teamData.teamName}] ${item.title}`;
@@ -101,7 +101,9 @@ export const dispatchPushAction = internalAction({
         icon: "/icon-192.png",
         badge: "/badge-72.png",
         tag: `reminder-${item._id}`,
-        url: "/",
+        url: item.teamId
+          ? `/?teamId=${item.teamId}&reminderId=${item._id}`
+          : `/?reminderId=${item._id}`,
       });
 
       const expiredEndpoints: string[] = [];

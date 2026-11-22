@@ -59,6 +59,9 @@ interface TeamsSectionProps {
   searchQuery?: string;
   onSearchChange?: (query: string) => void;
   onTeamStateChange?: (state: { teamName: string | null; subTab: string }) => void;
+  targetReminderId?: string | null;
+  targetTeamId?: Id<"teams"> | null;
+  onTargetHandled?: () => void;
 }
 
 export function TeamsSection({
@@ -69,6 +72,9 @@ export function TeamsSection({
   searchQuery = "",
   onSearchChange,
   onTeamStateChange,
+  targetReminderId,
+  targetTeamId,
+  onTargetHandled,
 }: TeamsSectionProps) {
   const userId = user._id as Id<"users">;
 
@@ -77,6 +83,14 @@ export function TeamsSection({
   const [activeTeamSubTab, setActiveTeamSubTab] = useState<
     "reminders" | "members" | "invitations" | "settings"
   >("reminders");
+
+  // Automatically switch to target team and reminders tab if targeted by notification
+  useEffect(() => {
+    if (targetTeamId) {
+      setSelectedTeamId(targetTeamId);
+      setActiveTeamSubTab("reminders");
+    }
+  }, [targetTeamId]);
 
   // Dialog States
   const [isCreateTeamOpen, setIsCreateTeamOpen] = useState(false);
@@ -521,6 +535,8 @@ export function TeamsSection({
               title={`${team.name} Reminders`}
               hideIfEmpty={false}
               onClearSearch={onSearchChange ? () => onSearchChange("") : undefined}
+              targetReminderId={targetReminderId}
+              onTargetHandled={onTargetHandled}
             />
           </div>
         )}
