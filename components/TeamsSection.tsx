@@ -12,6 +12,7 @@ import {
   Mail,
   Copy,
   Check,
+  RotateCw,
   Trash2,
   LogOut,
   Settings,
@@ -64,6 +65,32 @@ interface TeamsSectionProps {
   onTargetHandled?: () => void;
 }
 
+function getBaseUrl(): string {
+  if (typeof window === "undefined") return "";
+
+  // If a public app URL is configured via environment variable, use it directly
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
+  }
+
+  const { protocol, hostname, port } = window.location;
+  const portSuffix = port ? `:${port}` : "";
+
+  // WhatsApp Web and mobile only hyperlink URLs that have an alphabetic Top-Level Domain (TLD) like .com, .io, etc.
+  // When using a raw IP address (e.g. 10.166.75.143) with a port (:3000), WhatsApp ignores the port and path,
+  // making it unclickable. Appending '.sslip.io' gives it a valid .io TLD that resolves directly back to the IP.
+  const isIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname);
+  if (isIp) {
+    return `${protocol}//${hostname}.sslip.io${portSuffix}`;
+  }
+
+  if (hostname === "localhost") {
+    return `${protocol}//127.0.0.1.sslip.io${portSuffix}`;
+  }
+
+  return window.location.origin;
+}
+
 export function TeamsSection({
   user,
   currentTime,
@@ -104,6 +131,8 @@ export function TeamsSection({
   const [isInviting, setIsInviting] = useState(false);
   const [generatedInviteLink, setGeneratedInviteLink] = useState<string | null>(null);
   const [hasCopiedLink, setHasCopiedLink] = useState(false);
+  const [isLoadingInviteLink, setIsLoadingInviteLink] = useState(false);
+  const [isResettingLink, setIsResettingLink] = useState(false);
 
   const [isEditTeamOpen, setIsEditTeamOpen] = useState(false);
   const [editTeamName, setEditTeamName] = useState("");
@@ -192,6 +221,50 @@ export function TeamsSection({
   const declineInvitation = useMutation(api.teams.declineInvitation);
   const updateMemberRole = useMutation(api.teams.updateMemberRole);
   const removeMember = useMutation(api.teams.removeMember);
+  const getOrCreateTeamInviteCode = useMutation(api.teams.getOrCreateTeamInviteCode);
+  const regenerateTeamInviteCode = useMutation(api.teams.regenerateTeamInviteCode);
+
+  // Load or generate team reusable invite link whenever invite dialog opens
+  useEffect(() => {
+    if (
+      isInviteOpen &&
+      selectedTeamId &&
+      userId &&
+      (teamDetails?.userRole === "owner" || teamDetails?.userRole === "admin")
+    ) {
+      setIsLoadingInviteLink(true);
+      getOrCreateTeamInviteCode({ teamId: selectedTeamId, userId })
+        .then((res) => {
+          if (res?.inviteCode) {
+            setGeneratedInviteLink(`${getBaseUrl()}/invite/${res.inviteCode}`);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to load invite link:", err);
+          toast.error("Failed to retrieve invite link");
+        })
+        .finally(() => {
+          setIsLoadingInviteLink(false);
+        });
+    }
+  }, [isInviteOpen, selectedTeamId, userId, teamDetails?.userRole, getOrCreateTeamInviteCode]);
+
+  const handleResetInviteLink = async () => {
+    if (!selectedTeamId || !userId) return;
+    setIsResettingLink(true);
+    try {
+      const res = await regenerateTeamInviteCode({ teamId: selectedTeamId, userId });
+      if (res?.inviteCode) {
+        setGeneratedInviteLink(`${getBaseUrl()}/invite/${res.inviteCode}`);
+        toast.success("New invite link generated! Old link has been revoked.");
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to reset invite link";
+      toast.error(msg);
+    } finally {
+      setIsResettingLink(false);
+    }
+  };
 
   // Handlers
 
@@ -260,7 +333,7 @@ export function TeamsSection({
         role: inviteRole,
       });
 
-      const inviteUrl = `${window.location.origin}/invite/${res.token}`;
+      const inviteUrl = `${getBaseUrl()}/invite/${res.token}`;
       setGeneratedInviteLink(inviteUrl);
       toast.success("Invitation generated! Share via WhatsApp or Email.");
       setInviteEmail("");
@@ -689,9 +762,9 @@ export function TeamsSection({
             ) : (
               <div className="rounded-2xl border border-zinc-200/80 dark:border-white/[0.08] bg-white dark:bg-[#151624] divide-y divide-zinc-200/70 dark:divide-white/[0.06] overflow-hidden">
                 {pendingInvitations.map((inv) => {
-                  const inviteLink = `${window.location.origin}/invite/${inv.token}`;
-                  const waUrl = `https://wa.me/?text=${encodeURIComponent(
-                    `Hey! You have been invited to join the team "${team.name}" on VoiceReminder to collaborate on reminders.\n\nClick this secure link to accept: ${inviteLink}`
+                  const inviteLink = `${getBaseUrl()}/invite/${inv.token}`;
+                  const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(
+                    `Hi,\n\nYou have been invited to join the team "${team.name}" on VoiceReminder.\n\nClick the link below to accept and join:\n\n${inviteLink}\n\nLooking forward to collaborating with you!`
                   )}`;
                   const mailtoUrl = `mailto:${inv.invitedEmail}?subject=${encodeURIComponent(
                     `Invitation to join "${team.name}" on VoiceReminder`
@@ -928,144 +1001,99 @@ export function TeamsSection({
         <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
           <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>Invite Member to {team.name}</DialogTitle>
+              <DialogTitle>Invite to {team.name}</DialogTitle>
               <DialogDescription>
-                Send an invitation. The recipient can join via WhatsApp or Email and sign in to collaborate.
+                Share this link via WhatsApp, Email, or copy it. Anyone with this link can join {team.name} as a member.
               </DialogDescription>
             </DialogHeader>
 
-            {generatedInviteLink ? (
-              <div className="space-y-4 py-2">
-                <div className="rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/40 p-3.5 space-y-2">
-                  <p className="text-xs font-semibold text-purple-900 dark:text-purple-300">
-                    Secure Invitation Link Generated:
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      readOnly
-                      value={generatedInviteLink}
-                      className="text-xs font-mono bg-white dark:bg-[#161726]"
-                    />
-                    <Button
-                      size="sm"
-                      onClick={() => copyToClipboard(generatedInviteLink)}
-                      className="bg-purple-600 hover:bg-purple-700 text-white shrink-0 cursor-pointer text-xs"
-                    >
-                      {hasCopiedLink ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                      <span>{hasCopiedLink ? "Copied" : "Copy"}</span>
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Instant Share Buttons: WhatsApp & Email */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                  <a
-                    href={`https://wa.me/?text=${encodeURIComponent(
-                      `Hey! You have been invited to join the team "${team.name}" on VoiceReminder to collaborate on reminders.\n\nClick this secure link to accept: ${generatedInviteLink}`
-                    )}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-1.5 rounded-xl bg-[#25D366] hover:bg-[#20ba5a] text-white font-semibold text-xs h-10 px-3 shadow-2xs transition-all text-center cursor-pointer"
-                  >
-                    <span>💬 Share via WhatsApp</span>
-                  </a>
-
-                  <a
-                    href={`mailto:${lastInvitedEmail || ""}?subject=${encodeURIComponent(
-                      `Invitation to join "${team.name}" on VoiceReminder`
-                    )}&body=${encodeURIComponent(
-                      `Hi,\n\nI've invited you to join "${team.name}" on VoiceReminder as a ${inviteRole}.\n\nClick the link below to accept your invitation:\n${generatedInviteLink}\n\nLooking forward to collaborating with you!`
-                    )}`}
-                    className="flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs h-10 px-3 shadow-2xs transition-all text-center cursor-pointer"
-                  >
-                    <Mail className="h-3.5 w-3.5" />
-                    <span>Send Email</span>
-                  </a>
-                </div>
-
-                <DialogFooter>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setGeneratedInviteLink(null);
-                      setIsInviteOpen(false);
-                    }}
-                    className="cursor-pointer w-full text-xs"
-                  >
-                    Done
-                  </Button>
-                </DialogFooter>
-              </div>
-            ) : (
-              <form onSubmit={handleInviteSubmit} className="space-y-4 py-2">
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-                    Email Address *
-                  </label>
+            <div className="space-y-4 py-2">
+              <div className="rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/40 p-3.5 space-y-2">
+                <p className="text-xs font-semibold text-purple-900 dark:text-purple-300">
+                  Team Invitation Link:
+                </p>
+                <div className="flex items-center gap-2">
                   <Input
-                    type="email"
-                    required
-                    placeholder="teammate@example.com"
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    className="text-xs"
+                    readOnly
+                    value={isLoadingInviteLink ? "Generating link..." : (generatedInviteLink || "")}
+                    className="text-xs font-mono bg-white dark:bg-[#161726]"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-                    Role
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setInviteRole("member")}
-                      className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${inviteRole === "member"
-                        ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300"
-                        : "border-zinc-200 dark:border-white/[0.08] text-zinc-600 dark:text-zinc-400"
-                        }`}
-                    >
-                      <p className="font-bold text-xs">Member</p>
-                      <p className="text-[10px] mt-0.5 opacity-80">
-                        View and manage team reminders
-                      </p>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setInviteRole("admin")}
-                      className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${inviteRole === "admin"
-                        ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300"
-                        : "border-zinc-200 dark:border-white/[0.08] text-zinc-600 dark:text-zinc-400"
-                        }`}
-                    >
-                      <p className="font-bold text-xs">Admin</p>
-                      <p className="text-[10px] mt-0.5 opacity-80">
-                        Can invite & manage team members
-                      </p>
-                    </button>
-                  </div>
-                </div>
-
-                <DialogFooter className="pt-2">
                   <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setIsInviteOpen(false)}
-                    className="cursor-pointer text-xs"
+                    size="sm"
+                    disabled={isLoadingInviteLink || !generatedInviteLink}
+                    onClick={() => generatedInviteLink && copyToClipboard(generatedInviteLink)}
+                    className="bg-purple-600 hover:bg-purple-700 text-white shrink-0 cursor-pointer text-xs"
                   >
-                    Cancel
+                    {hasCopiedLink ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                    <span>{hasCopiedLink ? "Copied" : "Copy"}</span>
                   </Button>
-                  <Button
-                    type="submit"
-                    disabled={isInviting || !inviteEmail.trim()}
-                    className="bg-purple-600 hover:bg-purple-700 text-white cursor-pointer text-xs font-semibold"
-                  >
-                    {isInviting ? "Generating..." : "Generate Invite Link"}
-                  </Button>
-                </DialogFooter>
-              </form>
-            )}
+                </div>
+              </div>
+
+              {/* Instant Share Buttons: WhatsApp & Email */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <a
+                  href={
+                    generatedInviteLink
+                      ? `https://api.whatsapp.com/send?text=${encodeURIComponent(
+                          `Hi,\n\nYou have been invited to join the team "${team.name}" on VoiceReminder.\n\nClick the link below to accept and join:\n\n${generatedInviteLink}\n\nLooking forward to collaborating with you!`
+                        )}`
+                      : "#"
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => {
+                    if (!generatedInviteLink) e.preventDefault();
+                  }}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-[#25D366] hover:bg-[#20ba5a] text-white font-semibold text-xs h-10 px-3 shadow-2xs transition-all text-center cursor-pointer"
+                >
+                  <span>💬 Share via WhatsApp</span>
+                </a>
+
+                <a
+                  href={
+                    generatedInviteLink
+                      ? `mailto:?subject=${encodeURIComponent(
+                          `Invitation to join "${team.name}" on VoiceReminder`
+                        )}&body=${encodeURIComponent(
+                          `Hi,\n\nYou have been invited to join the team "${team.name}" on VoiceReminder.\n\nClick the link below to accept and join:\n\n${generatedInviteLink}\n\nLooking forward to collaborating with you!`
+                        )}`
+                      : "#"
+                  }
+                  onClick={(e) => {
+                    if (!generatedInviteLink) e.preventDefault();
+                  }}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs h-10 px-3 shadow-2xs transition-all text-center cursor-pointer"
+                >
+                  <Mail className="h-3.5 w-3.5" />
+                  <span>Send via Email</span>
+                </a>
+              </div>
+
+              <div className="pt-2 flex items-center justify-between border-t border-zinc-100 dark:border-white/[0.06]">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={isResettingLink || isLoadingInviteLink}
+                  onClick={handleResetInviteLink}
+                  className="text-[11px] text-zinc-500 hover:text-rose-600 dark:hover:text-rose-400 p-0 h-auto cursor-pointer"
+                  title="Revoke existing invite link and generate a fresh one"
+                >
+                  <RotateCw className={`h-3 w-3 mr-1 ${isResettingLink ? "animate-spin" : ""}`} />
+                  {isResettingLink ? "Resetting link..." : "Reset Invite Link"}
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsInviteOpen(false)}
+                  className="cursor-pointer text-xs"
+                >
+                  Done
+                </Button>
+              </div>
+            </div>
           </DialogContent>
         </Dialog>
 

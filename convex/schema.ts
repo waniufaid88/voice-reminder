@@ -82,9 +82,12 @@ export default defineSchema({
     name: v.string(),
     description: v.optional(v.string()),
     createdById: v.id("users"),
+    inviteCode: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_createdById", ["createdById"]),
+  })
+    .index("by_createdById", ["createdById"])
+    .index("by_inviteCode", ["inviteCode"]),
 
   teamMembers: defineTable({
     teamId: v.id("teams"),

@@ -90,10 +90,16 @@ export const createTeam = mutation({
     }
 
     const now = Date.now();
+    const randomHex = Array.from({ length: 24 }, () =>
+      Math.floor(Math.random() * 16).toString(16)
+    ).join("");
+    const inviteCode = `${now}-${randomHex}`;
+
     const teamId = await ctx.db.insert("teams", {
       name: trimmedName,
       description: trimmedDescription || undefined,
       createdById: args.userId,
+      inviteCode,
       createdAt: now,
       updatedAt: now,
     });
@@ -533,11 +539,109 @@ export const cancelInvitation = mutation({
 });
 
 /**
- * Public query to look up invitation details by token.
+ * Retrieves the team's reusable invite code. If it doesn't exist, generates one and saves it.
+ * Only owners and admins can access or share the invite link.
+ */
+export const getOrCreateTeamInviteCode = mutation({
+  args: {
+    teamId: v.id("teams"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const requester = await getMembership(ctx, args.teamId, args.userId);
+    if (!requester || (requester.role !== "owner" && requester.role !== "admin")) {
+      throw new Error("Only team owners and admins can access or share the invite link.");
+    }
+
+    const team = await ctx.db.get(args.teamId);
+    if (!team) throw new Error("Team not found.");
+
+    if (team.inviteCode) {
+      return { inviteCode: team.inviteCode };
+    }
+
+    const randomHex = Array.from({ length: 24 }, () =>
+      Math.floor(Math.random() * 16).toString(16)
+    ).join("");
+    const inviteCode = `${Date.now()}-${randomHex}`;
+
+    await ctx.db.patch(team._id, {
+      inviteCode,
+      updatedAt: Date.now(),
+    });
+
+    return { inviteCode };
+  },
+});
+
+/**
+ * Regenerates the team's reusable invite code, invalidating any previous invite link.
+ * Only owners and admins can reset the invite link.
+ */
+export const regenerateTeamInviteCode = mutation({
+  args: {
+    teamId: v.id("teams"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const requester = await getMembership(ctx, args.teamId, args.userId);
+    if (!requester || (requester.role !== "owner" && requester.role !== "admin")) {
+      throw new Error("Only team owners and admins can reset the invite link.");
+    }
+
+    const team = await ctx.db.get(args.teamId);
+    if (!team) throw new Error("Team not found.");
+
+    const randomHex = Array.from({ length: 24 }, () =>
+      Math.floor(Math.random() * 16).toString(16)
+    ).join("");
+    const inviteCode = `${Date.now()}-${randomHex}`;
+
+    await ctx.db.patch(team._id, {
+      inviteCode,
+      updatedAt: Date.now(),
+    });
+
+    return { inviteCode };
+  },
+});
+
+/**
+ * Public query to look up invitation details by token or team inviteCode.
  */
 export const getInvitationByToken = query({
   args: { token: v.string() },
   handler: async (ctx, args) => {
+    // 1. Check if token matches a team's reusable inviteCode
+    const team = await ctx.db
+      .query("teams")
+      .withIndex("by_inviteCode", (q) => q.eq("inviteCode", args.token))
+      .first();
+
+    if (team) {
+      const owner = await ctx.db.get(team.createdById);
+      const members = await ctx.db
+        .query("teamMembers")
+        .withIndex("by_teamId", (q) => q.eq("teamId", team._id))
+        .collect();
+
+      return {
+        invitationId: null as Id<"teamInvitations"> | null,
+        teamId: team._id,
+        teamName: team.name,
+        teamDescription: team.description,
+        invitedEmail: null as string | null,
+        inviterName: owner?.name || "Team Owner",
+        role: "member" as const,
+        status: "pending" as const,
+        isExpired: false,
+        expiresAt: null as number | null,
+        isReusableLink: true,
+        memberCount: members.length,
+      };
+    }
+
+    // 2. Individual invitation lookup
     const invite = await ctx.db
       .query("teamInvitations")
       .withIndex("by_token", (q) => q.eq("token", args.token))
@@ -545,8 +649,8 @@ export const getInvitationByToken = query({
 
     if (!invite) return null;
 
-    const team = await ctx.db.get(invite.teamId);
-    if (!team) return null;
+    const invitedTeam = await ctx.db.get(invite.teamId);
+    if (!invitedTeam) return null;
 
     const inviter = await ctx.db.get(invite.invitedById);
     const now = Date.now();
@@ -555,21 +659,22 @@ export const getInvitationByToken = query({
     return {
       invitationId: invite._id,
       teamId: invite.teamId,
-      teamName: team.name,
-      teamDescription: team.description,
+      teamName: invitedTeam.name,
+      teamDescription: invitedTeam.description,
       invitedEmail: invite.invitedEmail,
       inviterName: inviter?.name || "A team member",
       role: invite.role,
       status: invite.status,
       isExpired,
       expiresAt: invite.expiresAt,
+      isReusableLink: false,
+      memberCount: undefined,
     };
   },
 });
 
 /**
- * Accepts an invitation.
- * IMPORTANT: The logged in user must have the exact matching invited email address.
+ * Accepts an invitation (handles both reusable team invite links and email invitations).
  */
 export const acceptInvitation = mutation({
   args: {
@@ -577,6 +682,32 @@ export const acceptInvitation = mutation({
     userId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    // 1. Check if token matches a team's reusable inviteCode
+    const team = await ctx.db
+      .query("teams")
+      .withIndex("by_inviteCode", (q) => q.eq("inviteCode", args.token))
+      .first();
+
+    if (team) {
+      const user = await ctx.db.get(args.userId);
+      if (!user) throw new Error("User not found.");
+
+      const existingMembership = await getMembership(ctx, team._id, args.userId);
+      if (existingMembership) {
+        return { success: true, teamId: team._id, alreadyMember: true };
+      }
+
+      await ctx.db.insert("teamMembers", {
+        teamId: team._id,
+        userId: args.userId,
+        role: "member",
+        joinedAt: Date.now(),
+      });
+
+      return { success: true, teamId: team._id, alreadyMember: false };
+    }
+
+    // 2. Individual email invitation logic
     const invite = await ctx.db
       .query("teamInvitations")
       .withIndex("by_token", (q) => q.eq("token", args.token))
@@ -599,7 +730,7 @@ export const acceptInvitation = mutation({
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("User not found.");
 
-    // Strict email match requirement
+    // Strict email match requirement for individual invites
     if (user.email.toLowerCase() !== invite.invitedEmail.toLowerCase()) {
       throw new Error(
         `This invitation was sent to ${invite.invitedEmail}. You are signed in as ${user.email}. Please sign in with ${invite.invitedEmail} to accept.`
@@ -623,7 +754,7 @@ export const acceptInvitation = mutation({
       updatedAt: now,
     });
 
-    return { success: true, teamId: invite.teamId };
+    return { success: true, teamId: invite.teamId, alreadyMember: Boolean(existingMembership) };
   },
 });
 
@@ -636,6 +767,16 @@ export const declineInvitation = mutation({
     userId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    // If reusable team link, declining is just a no-op success
+    const team = await ctx.db
+      .query("teams")
+      .withIndex("by_inviteCode", (q) => q.eq("inviteCode", args.token))
+      .first();
+
+    if (team) {
+      return { success: true };
+    }
+
     const invite = await ctx.db
       .query("teamInvitations")
       .withIndex("by_token", (q) => q.eq("token", args.token))

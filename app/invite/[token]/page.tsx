@@ -51,6 +51,14 @@ function InviteAcceptContent({ params }: InvitePageProps) {
   const acceptInvitation = useMutation(api.teams.acceptInvitation);
   const declineInvitation = useMutation(api.teams.declineInvitation);
 
+  const userTeamRole = useQuery(
+    api.teams.getUserTeamRole,
+    inviteDetails?.teamId && currentUser
+      ? { teamId: inviteDetails.teamId, userId: currentUser._id as Id<"users"> }
+      : "skip"
+  );
+  const isAlreadyMember = Boolean(userTeamRole);
+
   const handleAccept = async () => {
     if (!currentUser || !inviteDetails) return;
     setIsAccepting(true);
@@ -60,7 +68,7 @@ function InviteAcceptContent({ params }: InvitePageProps) {
         userId: currentUser._id as Id<"users">,
       });
       toast.success(`You have joined ${inviteDetails.teamName}! 🎉`);
-      router.push("/");
+      router.push(`/?teamId=${inviteDetails.teamId}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to accept invitation";
       toast.error(msg);
@@ -167,6 +175,7 @@ function InviteAcceptContent({ params }: InvitePageProps) {
 
   const isEmailMatching =
     currentUser &&
+    inviteDetails.invitedEmail &&
     currentUser.email.toLowerCase() === inviteDetails.invitedEmail.toLowerCase();
 
   return (
@@ -194,8 +203,14 @@ function InviteAcceptContent({ params }: InvitePageProps) {
                 {inviteDetails.teamDescription}
               </p>
             )}
-            <div className="pt-2 flex items-center justify-center gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+            <div className="pt-2 flex flex-wrap items-center justify-center gap-2 text-xs text-zinc-600 dark:text-zinc-300">
               <span>Invited by <strong className="text-zinc-900 dark:text-white">{inviteDetails.inviterName}</strong></span>
+              {inviteDetails.memberCount !== undefined && (
+                <>
+                  <span>•</span>
+                  <span>{inviteDetails.memberCount} {inviteDetails.memberCount === 1 ? "member" : "members"}</span>
+                </>
+              )}
               <span>•</span>
               <span className="font-semibold text-purple-600 dark:text-purple-400 capitalize bg-purple-50 dark:bg-purple-950/60 px-2 py-0.5 rounded-md border border-purple-200 dark:border-purple-800/40">
                 {inviteDetails.role}
@@ -203,90 +218,170 @@ function InviteAcceptContent({ params }: InvitePageProps) {
             </div>
           </div>
 
-          {/* Scenario 1: User is not logged in */}
-          {!currentUser ? (
-            <div className="space-y-4">
-              <div className="rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/40 p-3.5 text-xs text-amber-800 dark:text-amber-300 space-y-1">
-                <p className="font-semibold">Sign in required</p>
-                <p>
-                  This invitation was sent to <strong>{inviteDetails.invitedEmail}</strong>. Please sign in with this email address to accept.
-                </p>
-              </div>
+          {/* Reusable Invite Link Flow */}
+          {inviteDetails.isReusableLink ? (
+            !currentUser ? (
+              /* Scenario A: Not logged in */
+              <div className="space-y-4">
+                <div className="rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/40 p-3.5 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                  <p className="font-semibold">Sign in required</p>
+                  <p>
+                    Please sign in or create an account to join <strong>{inviteDetails.teamName}</strong>.
+                  </p>
+                </div>
 
-              <div className="flex flex-col gap-2.5">
+                <div className="flex flex-col gap-2.5">
+                  <Link
+                    href={`/login?redirect=/invite/${token}`}
+                    className={buttonVariants({
+                      className: "w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl flex items-center justify-center gap-2",
+                    })}
+                  >
+                    <LogIn className="h-4 w-4" />
+                    <span>Sign In to Join</span>
+                  </Link>
+
+                  <Link
+                    href={`/register?redirect=/invite/${token}`}
+                    className={buttonVariants({
+                      variant: "outline",
+                      className: "w-full rounded-xl flex items-center justify-center",
+                    })}
+                  >
+                    <span>Create a New Account</span>
+                  </Link>
+                </div>
+              </div>
+            ) : isAlreadyMember ? (
+              /* Scenario B: Already a team member */
+              <div className="space-y-4">
+                <div className="rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/40 p-3.5 text-xs text-purple-900 dark:text-purple-300 flex items-center gap-2">
+                  <Check className="h-4 w-4 shrink-0 text-purple-600" />
+                  <span>You are already a member of <strong>{inviteDetails.teamName}</strong></span>
+                </div>
+
                 <Link
-                  href={`/login?redirect=/invite/${token}&email=${encodeURIComponent(inviteDetails.invitedEmail)}`}
+                  href={`/?teamId=${inviteDetails.teamId}`}
                   className={buttonVariants({
-                    className: "w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl flex items-center justify-center gap-2",
+                    className: "w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl h-10 font-bold flex items-center justify-center gap-2",
                   })}
                 >
-                  <LogIn className="h-4 w-4" />
-                  <span>Sign In to Accept</span>
-                </Link>
-
-                <Link
-                  href={`/register?redirect=/invite/${token}&email=${encodeURIComponent(inviteDetails.invitedEmail)}`}
-                  className={buttonVariants({
-                    variant: "outline",
-                    className: "w-full rounded-xl flex items-center justify-center",
-                  })}
-                >
-                  <span>Create a New Account</span>
+                  <span>Go to Team Dashboard</span>
+                  <ArrowRight className="h-4 w-4" />
                 </Link>
               </div>
-            </div>
-          ) : !isEmailMatching ? (
-            /* Scenario 2: User is logged in with a different email */
-            <div className="space-y-4">
-              <div className="rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/40 p-4 text-xs text-rose-800 dark:text-rose-300 space-y-2">
-                <p className="font-bold flex items-center gap-1.5">
-                  <AlertCircle className="h-4 w-4" />
-                  <span>Email Address Mismatch</span>
-                </p>
-                <p>
-                  This invitation was sent to <strong>{inviteDetails.invitedEmail}</strong>, but you are currently signed in as <strong>{currentUser.email}</strong>.
-                </p>
-                <p>
-                  To accept this invitation, please switch to the account with email <strong>{inviteDetails.invitedEmail}</strong>.
-                </p>
-              </div>
+            ) : (
+              /* Scenario C: Logged in and ready to join */
+              <div className="space-y-4">
+                <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 p-3.5 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                  <Check className="h-4 w-4 shrink-0 text-emerald-600" />
+                  <span>Signed in as <strong>{currentUser.email}</strong></span>
+                </div>
 
-              <Button
-                onClick={handleSwitchAccount}
-                className="w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl cursor-pointer"
-              >
-                <LogOut className="h-4 w-4 mr-2" />
-                <span>Switch to {inviteDetails.invitedEmail}</span>
-              </Button>
-            </div>
+                <div className="flex flex-col gap-2.5">
+                  <Button
+                    onClick={handleAccept}
+                    disabled={isAccepting}
+                    className="w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl h-10 font-bold cursor-pointer"
+                  >
+                    {isAccepting ? "Joining Team..." : "Join Team"}
+                    <ArrowRight className="h-4 w-4 ml-2" />
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    onClick={() => router.push("/")}
+                    className="w-full text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 rounded-xl cursor-pointer"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )
           ) : (
-            /* Scenario 3: User is logged in with matching email */
-            <div className="space-y-4">
-              <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 p-3.5 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
-                <Check className="h-4 w-4 shrink-0 text-emerald-600" />
-                <span>Signed in as <strong>{currentUser.email}</strong></span>
-              </div>
+            /* Legacy Specific Email Invite Flow */
+            !currentUser ? (
+              <div className="space-y-4">
+                <div className="rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/40 p-3.5 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                  <p className="font-semibold">Sign in required</p>
+                  <p>
+                    This invitation was sent to <strong>{inviteDetails.invitedEmail}</strong>. Please sign in with this email address to accept.
+                  </p>
+                </div>
 
-              <div className="flex flex-col gap-2.5">
-                <Button
-                  onClick={handleAccept}
-                  disabled={isAccepting}
-                  className="w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl h-10 font-bold cursor-pointer"
-                >
-                  {isAccepting ? "Joining Team..." : "Accept Invitation & Join Team"}
-                  <ArrowRight className="h-4 w-4 ml-2" />
-                </Button>
+                <div className="flex flex-col gap-2.5">
+                  <Link
+                    href={`/login?redirect=/invite/${token}&email=${encodeURIComponent(inviteDetails.invitedEmail || "")}`}
+                    className={buttonVariants({
+                      className: "w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl flex items-center justify-center gap-2",
+                    })}
+                  >
+                    <LogIn className="h-4 w-4" />
+                    <span>Sign In to Accept</span>
+                  </Link>
+
+                  <Link
+                    href={`/register?redirect=/invite/${token}&email=${encodeURIComponent(inviteDetails.invitedEmail || "")}`}
+                    className={buttonVariants({
+                      variant: "outline",
+                      className: "w-full rounded-xl flex items-center justify-center",
+                    })}
+                  >
+                    <span>Create a New Account</span>
+                  </Link>
+                </div>
+              </div>
+            ) : !isEmailMatching ? (
+              <div className="space-y-4">
+                <div className="rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/40 p-4 text-xs text-rose-800 dark:text-rose-300 space-y-2">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>Email Address Mismatch</span>
+                  </p>
+                  <p>
+                    This invitation was sent to <strong>{inviteDetails.invitedEmail}</strong>, but you are currently signed in as <strong>{currentUser.email}</strong>.
+                  </p>
+                  <p>
+                    To accept this invitation, please switch to the account with email <strong>{inviteDetails.invitedEmail}</strong>.
+                  </p>
+                </div>
 
                 <Button
-                  variant="outline"
-                  onClick={handleDecline}
-                  disabled={isDeclining}
-                  className="w-full text-xs text-zinc-500 hover:text-rose-600 rounded-xl cursor-pointer"
+                  onClick={handleSwitchAccount}
+                  className="w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl cursor-pointer"
                 >
-                  {isDeclining ? "Declining..." : "Decline Invitation"}
+                  <LogOut className="h-4 w-4 mr-2" />
+                  <span>Switch to {inviteDetails.invitedEmail}</span>
                 </Button>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 p-3.5 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                  <Check className="h-4 w-4 shrink-0 text-emerald-600" />
+                  <span>Signed in as <strong>{currentUser.email}</strong></span>
+                </div>
+
+                <div className="flex flex-col gap-2.5">
+                  <Button
+                    onClick={handleAccept}
+                    disabled={isAccepting}
+                    className="w-full bg-purple-600 hover:bg-purple-700 text-white rounded-xl h-10 font-bold cursor-pointer"
+                  >
+                    {isAccepting ? "Joining Team..." : "Accept Invitation & Join Team"}
+                    <ArrowRight className="h-4 w-4 ml-2" />
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    onClick={handleDecline}
+                    disabled={isDeclining}
+                    className="w-full text-xs text-zinc-500 hover:text-rose-600 rounded-xl cursor-pointer"
+                  >
+                    {isDeclining ? "Declining..." : "Decline Invitation"}
+                  </Button>
+                </div>
+              </div>
+            )
           )}
         </CardContent>
       </Card>
