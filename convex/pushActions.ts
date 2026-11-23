@@ -56,9 +56,13 @@ export const dispatchPushAction = internalAction({
       let notificationBody = item.content || "Your scheduled reminder is due!";
 
       if (item.teamId) {
+        const excludedUserIds = [
+          ...(item.deletedByUserIds || []),
+          ...(item.completedByUserIds || []),
+        ];
         const teamData = await ctx.runQuery(
           internal.notifications.internalGetSubscriptionsForTeam,
-          { teamId: item.teamId, excludedUserIds: item.deletedByUserIds }
+          { teamId: item.teamId, excludedUserIds }
         );
         subscriptions = teamData.subscriptions;
         notificationTitle = `⏰ [${teamData.teamName}] ${item.title}`;

@@ -83,7 +83,8 @@ export const listActiveReminders = query({
           tr.reminderStatus === "pending" &&
           !tr.isNotified &&
           tr.dueDate !== undefined &&
-          !tr.deletedByUserIds?.includes(args.userId)
+          !tr.deletedByUserIds?.includes(args.userId) &&
+          !tr.completedByUserIds?.includes(args.userId)
         ) {
           if (!activeList.some((item) => item._id === tr._id)) {
             activeList.push(tr);
@@ -437,10 +438,42 @@ export const toggleReminderStatus = mutation({
   args: {
     itemId: v.id("items"),
     targetStatus: v.optional(v.union(v.literal("pending"), v.literal("completed"))),
+    userId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
     if (!item) throw new Error("Item not found");
+
+    // Per-member completion for team reminders
+    if (item.teamId && args.userId) {
+      const currentCompleted = item.completedByUserIds || [];
+      const userCompleted = currentCompleted.includes(args.userId);
+
+      const targetStatus =
+        args.targetStatus !== undefined
+          ? args.targetStatus
+          : userCompleted
+            ? "pending"
+            : "completed";
+
+      if (targetStatus === "completed" && !userCompleted) {
+        const newCompleted = [...currentCompleted, args.userId];
+        await ctx.db.patch(args.itemId, {
+          completedByUserIds: newCompleted,
+          updatedAt: Date.now(),
+        });
+        return { isRecurringAdvanced: false, status: "completed" };
+      } else if (targetStatus === "pending" && userCompleted) {
+        const newCompleted = currentCompleted.filter((id) => id !== args.userId);
+        await ctx.db.patch(args.itemId, {
+          completedByUserIds: newCompleted,
+          updatedAt: Date.now(),
+        });
+        return { isRecurringAdvanced: false, status: "pending" };
+      }
+
+      return { isRecurringAdvanced: false, status: targetStatus };
+    }
 
     const currentStatus = item.reminderStatus || "pending";
 
@@ -530,6 +563,7 @@ export const toggleReminderStatus = mutation({
         reminderStatus: "pending",
         isNotified: false,
         scheduledJobId,
+        completedByUserIds: [],
         updatedAt: Date.now(),
       });
       return { isRecurringAdvanced: true, nextDue: nextDueDate };
@@ -663,10 +697,12 @@ export const deleteItem = mutation({
           throw new Error("Only the creator can delete this personal reminder.");
         }
       } else {
-        const isCompleted = item.reminderStatus === "completed";
-        const isOverdue = Boolean(item.dueDate && item.dueDate < Date.now());
+        const isCompleted = item.teamId
+          ? Boolean(item.completedByUserIds?.includes(args.userId)) || item.reminderStatus === "completed"
+          : item.reminderStatus === "completed";
+        const isOverdue = !isCompleted && Boolean(item.dueDate && item.dueDate < Date.now());
 
-        // Any team member can delete their own completed or overdue reminder in teams
+        // Any team member can delete their own completed or overdue reminder in teams (per-member dismissal)
         if (isCompleted || isOverdue) {
           const membership = await ctx.db
             .query("teamMembers")
@@ -797,7 +833,11 @@ export const getReminderCounts = query({
           continue;
       }
 
-      if (r.reminderStatus === "completed") {
+      const isCompleted = r.teamId
+        ? Boolean(r.completedByUserIds?.includes(args.userId))
+        : r.reminderStatus === "completed";
+
+      if (isCompleted) {
         completed++;
       } else if (r.dueDate !== undefined && r.dueDate > now) {
         upcoming++;
@@ -833,6 +873,7 @@ export const getRemindersByTab = query({
     const now = args.clientNow ?? Date.now();
     let reminders;
 
+    let totalTeamMembers = 0;
     if (args.teamId) {
       // Check membership
       const membership = await ctx.db
@@ -842,6 +883,12 @@ export const getRemindersByTab = query({
         )
         .first();
       if (!membership) throw new Error("You are not a member of this team.");
+
+      const allMembers = await ctx.db
+        .query("teamMembers")
+        .withIndex("by_teamId", (q) => q.eq("teamId", args.teamId!))
+        .collect();
+      totalTeamMembers = allMembers.length;
 
       reminders = await ctx.db
         .query("items")
@@ -896,24 +943,30 @@ export const getRemindersByTab = query({
 
     if (args.tab === "upcoming") {
       filtered = filtered
-        .filter(
-          (r) =>
-            r.reminderStatus !== "completed" &&
-            r.dueDate !== undefined &&
-            r.dueDate > now
-        )
+        .filter((r) => {
+          const isDone = r.teamId
+            ? Boolean(r.completedByUserIds?.includes(args.userId))
+            : r.reminderStatus === "completed";
+          return !isDone && r.dueDate !== undefined && r.dueDate > now;
+        })
         .sort((a, b) => pinComparator(a, b) || (a.dueDate || 0) - (b.dueDate || 0));
     } else if (args.tab === "overdue") {
       filtered = filtered
-        .filter(
-          (r) =>
-            r.reminderStatus !== "completed" &&
-            (!r.dueDate || r.dueDate <= now)
-        )
+        .filter((r) => {
+          const isDone = r.teamId
+            ? Boolean(r.completedByUserIds?.includes(args.userId))
+            : r.reminderStatus === "completed";
+          return !isDone && (!r.dueDate || r.dueDate <= now);
+        })
         .sort((a, b) => pinComparator(a, b) || (a.dueDate || 0) - (b.dueDate || 0));
     } else if (args.tab === "completed") {
       filtered = filtered
-        .filter((r) => r.reminderStatus === "completed")
+        .filter((r) => {
+          const isDone = r.teamId
+            ? Boolean(r.completedByUserIds?.includes(args.userId))
+            : r.reminderStatus === "completed";
+          return isDone;
+        })
         .sort(
           (a, b) =>
             pinComparator(a, b) ||
@@ -922,7 +975,16 @@ export const getRemindersByTab = query({
     }
 
     const totalCount = filtered.length;
-    const items = filtered.slice(0, args.limit);
+    const items = filtered.slice(0, args.limit).map((r) => {
+      if (r.teamId) {
+        return {
+          ...r,
+          completedMembersCount: r.completedByUserIds?.length || 0,
+          totalMembersCount: totalTeamMembers,
+        };
+      }
+      return r;
+    });
     const hasMore = totalCount > args.limit;
 
     return {

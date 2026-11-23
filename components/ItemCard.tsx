@@ -59,6 +59,9 @@ export interface ItemRecord {
   checklist?: Array<{ id: string; text: string; completed: boolean }>;
   teamId?: Id<"teams">;
   creatorName?: string;
+  completedByUserIds?: Id<"users">[];
+  completedMembersCount?: number;
+  totalMembersCount?: number;
   createdAt: number;
 }
 
@@ -128,7 +131,10 @@ export function ItemCard({
   }, []);
 
   // Reminder due calculations
-  const isCompletedReminder = item.reminderStatus === "completed";
+  const isTeamItem = Boolean(item.teamId);
+  const isCompletedReminder = isTeamItem && currentUserId
+    ? Boolean(item.completedByUserIds?.includes(currentUserId as Id<"users">))
+    : item.reminderStatus === "completed";
   const isOverdue =
     item.type === "reminder" &&
     !isCompletedReminder &&
@@ -139,7 +145,6 @@ export function ItemCard({
   // Team reminder:
   // - If completed or overdue: any team member can delete it (removes it exclusively for their view)
   // - If upcoming: creator, team admin, and team owner can edit and delete
-  const isTeamItem = Boolean(item.teamId);
   const isCreator = Boolean(
     currentUserId && item.userId && String(item.userId) === String(currentUserId)
   );
@@ -218,6 +223,7 @@ export function ItemCard({
       const res = await toggleReminderStatus({
         itemId: item._id,
         targetStatus,
+        userId: currentUserId ? (currentUserId as Id<"users">) : undefined,
       });
       if (res?.isRecurringAdvanced) {
         toast.success(
@@ -381,6 +387,13 @@ export function ItemCard({
                     • {item.creatorName}
                   </span>
                 )}
+              </span>
+            )}
+
+            {/* Team Member Completion Progress Badge */}
+            {item.teamId && item.totalMembersCount !== undefined && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 dark:bg-purple-950/60 border border-purple-300/60 dark:border-purple-800/50 px-2 py-0.5 text-[10px] font-bold text-purple-700 dark:text-purple-300">
+                👥 {item.completedMembersCount || 0}/{item.totalMembersCount} done
               </span>
             )}
 

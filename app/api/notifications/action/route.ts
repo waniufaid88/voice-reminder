@@ -6,7 +6,7 @@ import { Id } from "@/convex/_generated/dataModel";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action, itemId, minutes } = body;
+    const { action, itemId, minutes, userId } = body;
 
     if (!itemId) {
       return NextResponse.json({ error: "Missing itemId" }, { status: 400 });
@@ -17,6 +17,7 @@ export async function POST(req: NextRequest) {
         api.items.toggleReminderStatus,
         {
           itemId: itemId as Id<"items">,
+          userId: userId ? (userId as Id<"users">) : undefined,
         }
       );
       return NextResponse.json({ success: true, result });

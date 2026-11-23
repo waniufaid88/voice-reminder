@@ -485,6 +485,7 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
       const res = await toggleReminderStatus({
         itemId: alertingItem._id,
         targetStatus: "completed",
+        userId: userId || undefined,
       });
       if (res?.isRecurringAdvanced) {
         toast.success("Completed for today! Repeated schedule updated 🔁");

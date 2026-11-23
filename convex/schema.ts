@@ -62,6 +62,7 @@ export default defineSchema({
     teamId: v.optional(v.id("teams")),
     creatorName: v.optional(v.string()),
     deletedByUserIds: v.optional(v.array(v.id("users"))),
+    completedByUserIds: v.optional(v.array(v.id("users"))),
 
     createdAt: v.number(),
     updatedAt: v.number(),
