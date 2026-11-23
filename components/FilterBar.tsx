@@ -13,6 +13,8 @@ interface FilterBarProps {
     reminder: number;
     list: number;
     teams?: number;
+    activeList?: number;
+    completedList?: number;
   };
   availableTags: string[];
   selectedTag: string | null;

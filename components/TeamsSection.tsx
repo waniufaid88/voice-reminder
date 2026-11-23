@@ -841,8 +841,17 @@ export function TeamsSection({
                     <Button
                       type="submit"
                       size="sm"
-                      disabled={isSavingTeam}
-                      className="bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-xl cursor-pointer"
+                      disabled={
+                        isSavingTeam ||
+                        (editTeamName.trim() === team.name &&
+                          editTeamDescription.trim() === (team.description || ""))
+                      }
+                      className={`bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-xl transition-all ${
+                        editTeamName.trim() === team.name &&
+                        editTeamDescription.trim() === (team.description || "")
+                          ? "opacity-50 cursor-not-allowed"
+                          : "cursor-pointer"
+                      }`}
                     >
                       {isSavingTeam ? "Saving..." : "Save Changes"}
                     </Button>

@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 
 export const generateUploadUrl = mutation({
@@ -160,6 +161,9 @@ export const create = mutation({
   handler: async (ctx, args) => {
     // If saving a team reminder, verify user is an active member of that team
     if (args.teamId) {
+      if (args.type !== "reminder") {
+        throw new Error("Teams only support reminders. Notes and lists must be personal.");
+      }
       const membership = await ctx.db
         .query("teamMembers")
         .withIndex("by_teamId_userId", (q) =>
@@ -315,10 +319,41 @@ export const update = mutation({
     if (fields.recurrenceMode !== undefined) updates.recurrenceMode = fields.recurrenceMode;
     if (fields.recurrenceDays !== undefined) updates.recurrenceDays = fields.recurrenceDays;
     if (fields.checklist !== undefined) updates.checklist = fields.checklist;
-    if (fields.teamId !== undefined) updates.teamId = fields.teamId === null ? undefined : fields.teamId;
-    if (fields.isPinned !== undefined) updates.isPinned = fields.isPinned;
 
     const finalType = fields.type ?? existing.type;
+
+    // Strict rule: Notes and lists are strictly personal and can NEVER belong to a team
+    if (finalType === "note" || finalType === "list") {
+      updates.teamId = undefined;
+    } else if (fields.teamId !== undefined) {
+      updates.teamId = fields.teamId === null ? undefined : fields.teamId;
+    }
+
+    // If assigned to a team, ensure it is a reminder
+    if (updates.teamId && finalType !== "reminder") {
+      throw new Error("Teams only support reminders. Notes and lists must be personal.");
+    }
+
+    // If reassigning to a different team, verify the user is a member of that destination team
+    if (
+      updates.teamId &&
+      updates.teamId !== existing.teamId &&
+      fields.userId
+    ) {
+      const targetMembership = await ctx.db
+        .query("teamMembers")
+        .withIndex("by_teamId_userId", (q) =>
+          q.eq("teamId", updates.teamId as Id<"teams">).eq("userId", fields.userId!)
+        )
+        .first();
+
+      if (!targetMembership) {
+        throw new Error("You must be an active member of the destination team.");
+      }
+    }
+
+    if (fields.isPinned !== undefined) updates.isPinned = fields.isPinned;
+
     const finalStatus = fields.reminderStatus ?? existing.reminderStatus;
     const finalDueDate = fields.dueDate !== undefined ? fields.dueDate : existing.dueDate;
     const now = Date.now();

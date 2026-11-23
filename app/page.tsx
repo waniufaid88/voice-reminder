@@ -73,6 +73,34 @@ export default function DashboardPage() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<ItemRecord | null>(null);
 
+  // Sub-tabs for Lists view ("active" vs "completed")
+  const [listSubTab, setListSubTab] = useState<"active" | "completed">("active");
+  const [recentlyCompletedListIds, setRecentlyCompletedListIds] = useState<Set<string>>(new Set());
+
+  // Helper to determine whether a list has 100% completed checklist items
+  const isItemCompletedList = useCallback(
+    (item: { type: string; checklist?: Array<{ completed: boolean }> }) => {
+      if (item.type !== "list") return false;
+      const total = item.checklist?.length || 0;
+      if (total === 0) return false;
+      const completed = item.checklist?.filter((ci) => ci.completed).length || 0;
+      return completed === total;
+    },
+    []
+  );
+
+  // Smooth 1.5-second completion delay before moving card out of Active
+  const handleListCompleted = useCallback((itemId: string) => {
+    setRecentlyCompletedListIds((prev) => new Set(prev).add(itemId));
+    setTimeout(() => {
+      setRecentlyCompletedListIds((prev) => {
+        const next = new Set(prev);
+        next.delete(itemId);
+        return next;
+      });
+    }, 1500);
+  }, []);
+
   // Targeted reminder for notification navigation & pulsing highlight
   const [targetReminderId, setTargetReminderId] = useState<string | null>(null);
   const [targetTeamId, setTargetTeamId] = useState<Id<"teams"> | null>(null);
@@ -277,9 +305,31 @@ export default function DashboardPage() {
         }
       }
 
+      // If activeTab is "all": show only active lists (hide completed lists, unless recently completed within 1.5s)
+      if (activeTab === "all" && item.type === "list") {
+        const isDone = isItemCompletedList(item);
+        if (isDone && !recentlyCompletedListIds.has(item._id)) {
+          return false;
+        }
+      }
+
+      // If activeTab is "list": partition by listSubTab ("active" vs "completed")
+      if (activeTab === "list") {
+        const isDone = isItemCompletedList(item);
+        if (listSubTab === "active") {
+          if (isDone && !recentlyCompletedListIds.has(item._id)) {
+            return false;
+          }
+        } else if (listSubTab === "completed") {
+          if (!isDone) {
+            return false;
+          }
+        }
+      }
+
       return true;
     });
-  }, [rawItems, activeTab, selectedTag, searchQuery]);
+  }, [rawItems, activeTab, selectedTag, searchQuery, listSubTab, recentlyCompletedListIds, isItemCompletedList]);
 
   // Real-time filtered counts for main filter tabs
   const counts = useMemo(() => {
@@ -303,7 +353,15 @@ export default function DashboardPage() {
     }
 
     if (!rawItems) {
-      return { all: 0, note: 0, reminder: 0, list: 0, teams: teamsCount };
+      return {
+        all: 0,
+        note: 0,
+        reminder: 0,
+        list: 0,
+        activeList: 0,
+        completedList: 0,
+        teams: teamsCount,
+      };
     }
 
     const itemMatches = (item: (typeof rawItems)[number]) => {
@@ -320,6 +378,12 @@ export default function DashboardPage() {
 
     const notesCount = rawItems.filter((i) => i.type === "note" && itemMatches(i)).length;
     const listsCount = rawItems.filter((i) => i.type === "list" && itemMatches(i)).length;
+    const activeListsCount = rawItems.filter(
+      (i) => i.type === "list" && itemMatches(i) && !isItemCompletedList(i)
+    ).length;
+    const completedListsCount = rawItems.filter(
+      (i) => i.type === "list" && itemMatches(i) && isItemCompletedList(i)
+    ).length;
     const remindersCount =
       reminderCounts !== undefined
         ? reminderCounts.total
@@ -332,9 +396,11 @@ export default function DashboardPage() {
       note: notesCount,
       reminder: remindersCount,
       list: listsCount,
+      activeList: activeListsCount,
+      completedList: completedListsCount,
       teams: teamsCount,
     };
-  }, [rawItems, myTeams, searchQuery, selectedTag, reminderCounts]);
+  }, [rawItems, myTeams, searchQuery, selectedTag, reminderCounts, isItemCompletedList]);
 
   // Pinned non-reminders (notes & lists)
   const pinnedNonReminders = useMemo(
@@ -735,6 +801,65 @@ export default function DashboardPage() {
         ) : (
           /* Multi-type Dashboard Grid (All / Note / List) */
           <div className="space-y-6 sm:space-y-8">
+            {/* Dedicated Sub-tabs for Lists View (Active / Completed) */}
+            {activeTab === "list" && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-zinc-200/80 dark:border-zinc-800/80">
+                <div className="grid grid-cols-2 gap-1 rounded-2xl bg-zinc-200/60 p-1.5 dark:bg-zinc-800/60 backdrop-blur-xs w-full sm:w-auto sm:min-w-[280px]">
+                  {/* Active Sub-tab */}
+                  <button
+                    type="button"
+                    onClick={() => setListSubTab("active")}
+                    className={`flex min-h-[38px] items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition-all cursor-pointer select-none ${
+                      listSubTab === "active"
+                        ? "bg-purple-600 text-white shadow-sm shadow-purple-600/30"
+                        : "text-zinc-600 hover:text-zinc-900 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-white/[0.04]"
+                    }`}
+                  >
+                    <span>📋</span>
+                    <span>Active</span>
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
+                        listSubTab === "active"
+                          ? "bg-purple-700/80 text-white"
+                          : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                      }`}
+                    >
+                      {counts.activeList}
+                    </span>
+                  </button>
+
+                  {/* Completed Sub-tab */}
+                  <button
+                    type="button"
+                    onClick={() => setListSubTab("completed")}
+                    className={`flex min-h-[38px] items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition-all cursor-pointer select-none ${
+                      listSubTab === "completed"
+                        ? "bg-emerald-600 text-white shadow-sm shadow-emerald-600/30"
+                        : "text-zinc-600 hover:text-zinc-900 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-white/[0.04]"
+                    }`}
+                  >
+                    <span>✓</span>
+                    <span>Completed</span>
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold font-mono transition-colors ${
+                        listSubTab === "completed"
+                          ? "bg-emerald-700/80 text-white"
+                          : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                      }`}
+                    >
+                      {counts.completedList}
+                    </span>
+                  </button>
+                </div>
+
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {listSubTab === "active"
+                    ? "Lists with pending items"
+                    : "Lists where all checklist items are completed"}
+                </p>
+              </div>
+            )}
+
             {/* Tab-Based Reminders Section (Only on "All" tab when reminders exist) */}
             {activeTab === "all" && user?._id && (
               <TabBasedReminderDashboard
@@ -765,6 +890,7 @@ export default function DashboardPage() {
                       currentUserId={user?._id}
                       onEdit={setEditingItem}
                       isHighlighted={targetReminderId === item._id}
+                      onListCompleted={handleListCompleted}
                     />
                   ))}
                 </div>
@@ -775,7 +901,11 @@ export default function DashboardPage() {
             {regularLists.length > 0 && (activeTab === "all" || activeTab === "list") && (
               <div className="space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1.5">
-                  <span>📋 Lists ({regularLists.length})</span>
+                  <span>
+                    {activeTab === "list" && listSubTab === "completed"
+                      ? `✓ Completed Lists (${regularLists.length})`
+                      : `📋 Lists (${regularLists.length})`}
+                  </span>
                 </h2>
 
                 {/* Display 3 lists initially, or all lists when expanded (no scroll container) */}
@@ -790,6 +920,7 @@ export default function DashboardPage() {
                       currentUserId={user?._id}
                       onEdit={setEditingItem}
                       isHighlighted={targetReminderId === item._id}
+                      onListCompleted={handleListCompleted}
                     />
                   ))}
                 </div>
@@ -833,6 +964,7 @@ export default function DashboardPage() {
                       currentUserId={user?._id}
                       onEdit={setEditingItem}
                       isHighlighted={targetReminderId === item._id}
+                      onListCompleted={handleListCompleted}
                     />
                   ))}
                 </div>
@@ -843,17 +975,29 @@ export default function DashboardPage() {
             {filteredNonReminders.length === 0 && (activeTab === "note" || activeTab === "list") && (
               <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 py-16 text-center dark:border-zinc-800">
                 <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 text-2xl">
-                  {activeTab === "note" ? "📝" : "✓"}
+                  {activeTab === "note" ? "📝" : listSubTab === "completed" ? "✓" : "📋"}
                 </div>
                 <h3 className="mt-4 text-base font-bold text-zinc-900 dark:text-zinc-100">
                   {searchQuery || selectedTag
-                    ? `No ${activeTab}s match your filter`
-                    : `No ${activeTab}s yet`}
+                    ? `No ${activeTab === "list" && listSubTab === "completed" ? "completed lists" : activeTab + "s"} match your filter`
+                    : activeTab === "list"
+                      ? listSubTab === "completed"
+                        ? "No completed lists yet"
+                        : counts.completedList > 0
+                          ? "All lists completed! 🎉"
+                          : "No active lists yet"
+                      : "No notes yet"}
                 </h3>
                 <p className="mt-1 text-xs text-zinc-500 max-w-sm">
                   {searchQuery || selectedTag
                     ? "Try adjusting your search terms or clearing selected tags."
-                    : `Click the microphone button above to record your voice or type text to create a ${activeTab}.`}
+                    : activeTab === "list"
+                      ? listSubTab === "completed"
+                        ? "When all checklist items in a list are finished, it will appear here."
+                        : counts.completedList > 0
+                          ? "Great job! All your checklist items are finished. Check the Completed tab to review them."
+                          : "Click the microphone button above to record your voice or type text to create a list."
+                      : "Click the microphone button above to record your voice or type text to create a note."}
                 </p>
                 {(searchQuery || selectedTag) && (
                   <Button
@@ -1173,8 +1317,19 @@ export default function DashboardPage() {
               <Button
                 type="submit"
                 size="sm"
-                disabled={isSavingProfile}
-                className="rounded-xl bg-purple-600 hover:bg-purple-700 text-white shadow-xs"
+                disabled={
+                  isSavingProfile ||
+                  (!isPhotoRemoved &&
+                    !profileImageFile &&
+                    profileNameInput.trim() === (activeUser?.name || ""))
+                }
+                className={`rounded-xl bg-purple-600 hover:bg-purple-700 text-white shadow-xs transition-all ${
+                  !isPhotoRemoved &&
+                  !profileImageFile &&
+                  profileNameInput.trim() === (activeUser?.name || "")
+                    ? "opacity-50 cursor-not-allowed"
+                    : "cursor-pointer"
+                }`}
               >
                 {isSavingProfile ? (
                   <>

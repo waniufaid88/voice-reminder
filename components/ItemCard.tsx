@@ -67,6 +67,7 @@ interface ItemCardProps {
   currentUserId?: Id<"users"> | string | null;
   onEdit: (item: ItemRecord) => void;
   isHighlighted?: boolean;
+  onListCompleted?: (itemId: string) => void;
 }
 
 function formatCreatedDate(timestamp: number): string {
@@ -95,7 +96,13 @@ function formatCreatedDate(timestamp: number): string {
   }
 }
 
-export function ItemCard({ item, currentUserId, onEdit, isHighlighted }: ItemCardProps) {
+export function ItemCard({
+  item,
+  currentUserId,
+  onEdit,
+  isHighlighted,
+  onListCompleted,
+}: ItemCardProps) {
   const togglePin = useMutation(api.items.togglePin);
   const deleteItem = useMutation(api.items.deleteItem);
   const toggleChecklistItem = useMutation(api.items.toggleChecklistItem);
@@ -239,6 +246,56 @@ export function ItemCard({ item, currentUserId, onEdit, isHighlighted }: ItemCar
     toast.success(`Snoozed for ${label} ⏰`);
   };
 
+  const handleToggleChecklist = async (ciId: string, currentCompleted: boolean) => {
+    const isNowCompletingLastItem =
+      !currentCompleted &&
+      totalCount > 0 &&
+      item.checklist?.filter((c) => (c.id === ciId ? true : c.completed)).length === totalCount;
+
+    const wasFullyCompleted = totalCount > 0 && progressPercent === 100;
+
+    try {
+      if (isNowCompletingLastItem) {
+        onListCompleted?.(item._id);
+        toast(
+          (t) => (
+            <span className="flex items-center gap-2 text-xs">
+              <span>🎉 List completed! Moved to Completed</span>
+              <button
+                type="button"
+                onClick={async () => {
+                  toast.dismiss(t.id);
+                  try {
+                    await toggleChecklistItem({
+                      itemId: item._id,
+                      checklistItemId: ciId,
+                    });
+                  } catch (err) {
+                    console.error("Undo failed:", err);
+                  }
+                }}
+                className="ml-2 font-bold underline text-indigo-600 dark:text-indigo-400 hover:opacity-80 cursor-pointer"
+              >
+                Undo
+              </button>
+            </span>
+          ),
+          { duration: 4000 }
+        );
+      } else if (wasFullyCompleted && currentCompleted) {
+        toast.success("Item unchecked. List moved back to Active");
+      }
+
+      await toggleChecklistItem({
+        itemId: item._id,
+        checklistItemId: ciId,
+      });
+    } catch (err: unknown) {
+      console.error("Failed to toggle checklist item:", err);
+      toast.error("Failed to update checklist item");
+    }
+  };
+
   const handleAddChecklistItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newItemText.trim()) {
@@ -255,6 +312,8 @@ export function ItemCard({ item, currentUserId, onEdit, isHighlighted }: ItemCar
       completed: false,
     };
 
+    const wasFullyCompleted = totalCount > 0 && progressPercent === 100;
+
     try {
       await updateItem({
         itemId: item._id,
@@ -262,7 +321,11 @@ export function ItemCard({ item, currentUserId, onEdit, isHighlighted }: ItemCar
       });
       setNewItemText("");
       setIsAddingItem(false);
-      toast.success("Item added to checklist");
+      if (wasFullyCompleted) {
+        toast.success("Item added. List moved back to Active");
+      } else {
+        toast.success("Item added to checklist");
+      }
     } catch {
       toast.error("Failed to add checklist item");
     }
@@ -271,14 +334,11 @@ export function ItemCard({ item, currentUserId, onEdit, isHighlighted }: ItemCar
   return (
     <div
       id={`item-${item._id}`}
-      className={`group relative flex flex-col justify-between rounded-2xl border transition-all duration-300 p-4 sm:p-5 shadow-xs hover:shadow-md ${
-        isHighlighted
-          ? "ring-4 ring-purple-500 shadow-xl shadow-purple-500/40 scale-[1.01] animate-pulse z-20"
-          : ""
-      } ${
-        item.teamId ? "ring-1 ring-purple-500/25 dark:ring-purple-500/35 " : ""
-      }${
-        item.isPinned
+      className={`group relative flex flex-col justify-between rounded-2xl border transition-all duration-300 p-4 sm:p-5 shadow-xs hover:shadow-md ${isHighlighted
+        ? "ring-4 ring-purple-500 shadow-xl shadow-purple-500/40 scale-[1.01] animate-pulse z-20"
+        : ""
+        } ${item.teamId ? "ring-1 ring-purple-500/25 dark:ring-purple-500/35 " : ""
+        }${item.isPinned
           ? "border-purple-400/80 bg-purple-50/20 dark:border-purple-500/50 dark:bg-[#18192a]"
           : isCompletedReminder
             ? "border-emerald-600 dark:border-emerald-600 bg-white dark:bg-[#161726]"
@@ -287,7 +347,7 @@ export function ItemCard({ item, currentUserId, onEdit, isHighlighted }: ItemCar
               : item.type === "reminder"
                 ? "border-amber-600 dark:border-amber-600 bg-white dark:bg-[#151624] hover:border-amber-600"
                 : "border-zinc-200/90 dark:border-white/[0.07] bg-white dark:bg-[#151624] hover:border-zinc-300 dark:hover:border-white/[0.14]"
-      }`}
+        }`}
     >
       <div>
         {/* Card Header: Type Badge, Pin, & 3-Dots Menu */}
@@ -550,17 +610,28 @@ export function ItemCard({ item, currentUserId, onEdit, isHighlighted }: ItemCar
         {item.type === "list" && (
           <div className="mt-2.5 space-y-2.5">
             {/* Completion Subtitle */}
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              {totalCount > 0
-                ? `${completedCount} of ${totalCount} completed`
-                : "No checklist items yet"}
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                {totalCount > 0
+                  ? `${completedCount} of ${totalCount} completed`
+                  : "No checklist items yet"}
+              </p>
+              {totalCount > 0 && progressPercent === 100 && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 animate-in fade-in duration-300">
+                  <span>✓</span> Completed
+                </span>
+              )}
+            </div>
 
             {/* Progress Bar */}
             {totalCount > 0 && (
-              <div className="h-1.5 w-full bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden">
+              <div className="h-2 w-full bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 rounded-full transition-all duration-300"
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    progressPercent === 100
+                      ? "bg-gradient-to-r from-emerald-500 to-teal-500 shadow-xs shadow-emerald-500/50"
+                      : "bg-gradient-to-r from-purple-500 to-indigo-500"
+                  }`}
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
@@ -579,12 +650,7 @@ export function ItemCard({ item, currentUserId, onEdit, isHighlighted }: ItemCar
                   >
                     <Checkbox
                       checked={ci.completed}
-                      onCheckedChange={() =>
-                        toggleChecklistItem({
-                          itemId: item._id,
-                          checklistItemId: ci.id,
-                        })
-                      }
+                      onCheckedChange={() => handleToggleChecklist(ci.id, ci.completed)}
                       className="mt-0.5"
                     />
                     <span

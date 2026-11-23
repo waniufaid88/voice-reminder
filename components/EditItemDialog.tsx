@@ -64,12 +64,28 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
     },
   });
 
-  const { watch, getValues, setValue, reset, handleSubmit } = form;
+  const {
+    watch,
+    getValues,
+    setValue,
+    reset,
+    handleSubmit,
+    formState: { isDirty },
+  } = form;
+
   const currentType = watch("type");
   const currentTags = watch("tags") || [];
   const currentChecklist = watch("checklist") || [];
   const currentRecurrenceMode = (watch("recurrenceMode") as "once" | "daily" | "custom") || "once";
   const currentRecurrenceDays = watch("recurrenceDays") || [new Date().getDay()];
+
+  const initialTeamId = item
+    ? item.type === "reminder" && item.teamId
+      ? item.teamId
+      : "personal"
+    : "personal";
+  const isTeamChanged = selectedTeamId !== initialTeamId;
+  const hasChanges = isDirty || isTeamChanged;
 
   useEffect(() => {
     if (item) {
@@ -84,7 +100,7 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
         checklist: item.checklist || [],
         tags: item.tags || [],
       });
-      setSelectedTeamId(item.teamId || "personal");
+      setSelectedTeamId(item.type === "reminder" && item.teamId ? item.teamId : "personal");
     }
   }, [item, reset]);
 
@@ -95,7 +111,7 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
     if (!tag) return;
     if (!tag.startsWith("#")) tag = "#" + tag;
     if (!currentTags.includes(tag)) {
-      setValue("tags", [...currentTags, tag], { shouldValidate: true });
+      setValue("tags", [...currentTags, tag], { shouldValidate: true, shouldDirty: true });
     }
     setNewTagInput("");
   };
@@ -104,7 +120,7 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
     setValue(
       "tags",
       currentTags.filter((t) => t !== tagToRemove),
-      { shouldValidate: true }
+      { shouldValidate: true, shouldDirty: true }
     );
   };
 
@@ -120,7 +136,7 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
           completed: false,
         },
       ],
-      { shouldValidate: true }
+      { shouldValidate: true, shouldDirty: true }
     );
     setNewChecklistText("");
   };
@@ -129,7 +145,7 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
     setValue(
       "checklist",
       currentChecklist.filter((ci) => ci.id !== id),
-      { shouldValidate: true }
+      { shouldValidate: true, shouldDirty: true }
     );
   };
 
@@ -137,17 +153,23 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
     setValue(
       "checklist",
       currentChecklist.map((ci) => (ci.id === id ? { ...ci, text } : ci)),
-      { shouldValidate: true }
+      { shouldValidate: true, shouldDirty: true }
     );
   };
 
   const onSubmit = async (values: ItemFormValues) => {
     setIsSaving(true);
     try {
+      const isReminder = values.type === "reminder";
       const dueDate =
-        values.type === "reminder"
+        isReminder
           ? parseLocalDatetime(values.dueDateString)
           : undefined;
+
+      const teamId =
+        isReminder && selectedTeamId !== "personal"
+          ? (selectedTeamId as Id<"teams">)
+          : null;
 
       await updateItem({
         itemId: item._id,
@@ -157,14 +179,14 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
         type: values.type,
         tags: values.tags,
         dueDate,
-        isDaily: values.type === "reminder" ? values.recurrenceMode === "daily" : undefined,
-        recurrenceMode: values.type === "reminder" ? (values.recurrenceMode || "once") : undefined,
+        isDaily: isReminder ? values.recurrenceMode === "daily" : undefined,
+        recurrenceMode: isReminder ? (values.recurrenceMode || "once") : undefined,
         recurrenceDays:
-          values.type === "reminder" && values.recurrenceMode === "custom"
+          isReminder && values.recurrenceMode === "custom"
             ? values.recurrenceDays
             : undefined,
         checklist: values.type === "list" ? values.checklist : undefined,
-        teamId: selectedTeamId === "personal" ? null : selectedTeamId,
+        teamId,
       });
 
       toast.success("Item updated successfully!");
@@ -197,62 +219,75 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
           onSubmit={handleSubmit(onSubmit)}
           className="mt-4 space-y-4 max-h-[75vh] overflow-y-auto pr-1"
         >
-          {/* Category Tabs */}
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
-              Category
-            </label>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={currentType === "note" ? "default" : "secondary"}
-                className={`flex-1 ${currentType === "note" ? "bg-indigo-600 text-white" : ""}`}
-                onClick={() => setValue("type", "note", { shouldValidate: true })}
-              >
-                📝 Note
-              </Button>
-              <Button
-                type="button"
-                variant={currentType === "reminder" ? "default" : "secondary"}
-                className={`flex-1 ${currentType === "reminder" ? "bg-amber-500 text-white hover:bg-amber-600" : ""}`}
-                onClick={() => {
-                  setValue("type", "reminder", { shouldValidate: true });
-                  if (!getValues("dueDateString")) {
-                    const natural = parseNaturalReminder(
-                      getValues("content") || getValues("title") || "",
-                      new Date()
-                    );
-                    if (natural.dueDate) {
-                      setValue("dueDateString", formatLocalDatetime(natural.dueDate), { shouldValidate: true });
-                      if (natural.recurrenceMode) {
-                        setValue("recurrenceMode", natural.recurrenceMode, { shouldValidate: true });
-                        setValue("isDaily", natural.recurrenceMode === "daily", { shouldValidate: true });
-                      }
-                      if (natural.recurrenceDays) {
-                        setValue("recurrenceDays", natural.recurrenceDays, { shouldValidate: true });
-                      }
-                    } else {
-                      const defaultTime = formatLocalDatetime(Date.now());
-                      setValue("dueDateString", defaultTime, { shouldValidate: true });
-                    }
-                  }
-                }}
-              >
-                ⏰ Reminder
-              </Button>
-              <Button
-                type="button"
-                variant={currentType === "list" ? "default" : "secondary"}
-                className={`flex-1 ${currentType === "list" ? "bg-emerald-600 text-white hover:bg-emerald-700" : ""}`}
-                onClick={() => setValue("type", "list", { shouldValidate: true })}
-              >
-                ✓ Checklist
-              </Button>
+          {/* Category Tabs: Locked to Reminder if assigned to a team */}
+          {selectedTeamId !== "personal" ? (
+            <div className="flex items-center gap-2 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/40 px-3 py-2 text-xs font-semibold text-purple-900 dark:text-purple-200">
+              <span>⏰</span>
+              <span>Category: Reminder (Teams only support reminders)</span>
             </div>
-          </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
+                Category
+              </label>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant={currentType === "note" ? "default" : "secondary"}
+                  className={`flex-1 ${currentType === "note" ? "bg-indigo-600 text-white" : ""}`}
+                  onClick={() => {
+                    setValue("type", "note", { shouldValidate: true, shouldDirty: true });
+                    setSelectedTeamId("personal");
+                  }}
+                >
+                  📝 Note
+                </Button>
+                <Button
+                  type="button"
+                  variant={currentType === "reminder" ? "default" : "secondary"}
+                  className={`flex-1 ${currentType === "reminder" ? "bg-amber-500 text-white hover:bg-amber-600" : ""}`}
+                  onClick={() => {
+                    setValue("type", "reminder", { shouldValidate: true, shouldDirty: true });
+                    if (!getValues("dueDateString")) {
+                      const natural = parseNaturalReminder(
+                        getValues("content") || getValues("title") || "",
+                        new Date()
+                      );
+                      if (natural.dueDate) {
+                        setValue("dueDateString", formatLocalDatetime(natural.dueDate), { shouldValidate: true, shouldDirty: true });
+                        if (natural.recurrenceMode) {
+                          setValue("recurrenceMode", natural.recurrenceMode, { shouldValidate: true, shouldDirty: true });
+                          setValue("isDaily", natural.recurrenceMode === "daily", { shouldValidate: true, shouldDirty: true });
+                        }
+                        if (natural.recurrenceDays) {
+                          setValue("recurrenceDays", natural.recurrenceDays, { shouldValidate: true, shouldDirty: true });
+                        }
+                      } else {
+                        const defaultTime = formatLocalDatetime(Date.now());
+                        setValue("dueDateString", defaultTime, { shouldValidate: true, shouldDirty: true });
+                      }
+                    }
+                  }}
+                >
+                  ⏰ Reminder
+                </Button>
+                <Button
+                  type="button"
+                  variant={currentType === "list" ? "default" : "secondary"}
+                  className={`flex-1 ${currentType === "list" ? "bg-emerald-600 text-white hover:bg-emerald-700" : ""}`}
+                  onClick={() => {
+                    setValue("type", "list", { shouldValidate: true, shouldDirty: true });
+                    setSelectedTeamId("personal");
+                  }}
+                >
+                  ✓ Checklist
+                </Button>
+              </div>
+            </div>
+          )}
 
-          {/* Scope / Team Assignment */}
-          {myTeams && myTeams.length > 0 && (
+          {/* Scope / Team Assignment: Only visible for reminders */}
+          {currentType === "reminder" && myTeams && myTeams.length > 0 && (
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
                 Destination / Scope
@@ -261,10 +296,11 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
                 <button
                   type="button"
                   onClick={() => setSelectedTeamId("personal")}
-                  className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${selectedTeamId === "personal"
+                  className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${
+                    selectedTeamId === "personal"
                       ? "border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 font-semibold"
                       : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-700"
-                    }`}
+                  }`}
                 >
                   👤 Personal
                 </button>
@@ -274,11 +310,15 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
                     <button
                       key={team._id}
                       type="button"
-                      onClick={() => setSelectedTeamId(team._id)}
-                      className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${selectedTeamId === team._id
+                      onClick={() => {
+                        setSelectedTeamId(team._id);
+                        setValue("type", "reminder", { shouldValidate: true });
+                      }}
+                      className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${
+                        selectedTeamId === team._id
                           ? "border-purple-600 bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 font-semibold"
                           : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-700"
-                        }`}
+                      }`}
                     >
                       👥 {team.name}
                     </button>
@@ -355,11 +395,11 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
                 mode={currentRecurrenceMode}
                 selectedDays={currentRecurrenceDays}
                 onChangeMode={(mode) => {
-                  setValue("recurrenceMode", mode, { shouldValidate: true });
-                  setValue("isDaily", mode === "daily", { shouldValidate: true });
+                  setValue("recurrenceMode", mode, { shouldValidate: true, shouldDirty: true });
+                  setValue("isDaily", mode === "daily", { shouldValidate: true, shouldDirty: true });
                 }}
                 onChangeDays={(days) => {
-                  setValue("recurrenceDays", days, { shouldValidate: true });
+                  setValue("recurrenceDays", days, { shouldValidate: true, shouldDirty: true });
                 }}
               />
             </div>
@@ -464,7 +504,13 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isSaving}>
+            <Button
+              type="submit"
+              disabled={isSaving || !hasChanges}
+              className={`rounded-xl transition-all ${
+                !hasChanges ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+              }`}
+            >
               {isSaving ? "Saving..." : "Update Item"}
             </Button>
           </DialogFooter>
