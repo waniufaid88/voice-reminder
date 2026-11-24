@@ -619,10 +619,10 @@ export function TeamsSection({
           const q = searchQuery?.trim().toLowerCase();
           const filteredMembers = q
             ? members.filter(
-                (m) =>
-                  m.name.toLowerCase().includes(q) ||
-                  m.email.toLowerCase().includes(q)
-              )
+              (m) =>
+                m.name.toLowerCase().includes(q) ||
+                m.email.toLowerCase().includes(q)
+            )
             : members;
 
           return (
@@ -919,12 +919,11 @@ export function TeamsSection({
                         (editTeamName.trim() === team.name &&
                           editTeamDescription.trim() === (team.description || ""))
                       }
-                      className={`bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-xl transition-all ${
-                        editTeamName.trim() === team.name &&
+                      className={`bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-xl transition-all ${editTeamName.trim() === team.name &&
                         editTeamDescription.trim() === (team.description || "")
-                          ? "opacity-50 cursor-not-allowed"
-                          : "cursor-pointer"
-                      }`}
+                        ? "opacity-50 cursor-not-allowed"
+                        : "cursor-pointer"
+                        }`}
                     >
                       {isSavingTeam ? "Saving..." : "Save Changes"}
                     </Button>
@@ -1036,8 +1035,8 @@ export function TeamsSection({
                   href={
                     generatedInviteLink
                       ? `https://api.whatsapp.com/send?text=${encodeURIComponent(
-                          `Hi,\n\nYou have been invited to join the team "${team.name}" on VoiceReminder.\n\nClick the link below to accept and join:\n\n${generatedInviteLink}\n\nLooking forward to collaborating with you!`
-                        )}`
+                        `Hi,\n\nYou have been invited to join the team "${team.name}" on VoiceReminder.\n\nClick the link below to accept and join:\n\n${generatedInviteLink}\n\nLooking forward to collaborating with you!`
+                      )}`
                       : "#"
                   }
                   target="_blank"
@@ -1054,10 +1053,10 @@ export function TeamsSection({
                   href={
                     generatedInviteLink
                       ? `mailto:?subject=${encodeURIComponent(
-                          `Invitation to join "${team.name}" on VoiceReminder`
-                        )}&body=${encodeURIComponent(
-                          `Hi,\n\nYou have been invited to join the team "${team.name}" on VoiceReminder.\n\nClick the link below to accept and join:\n\n${generatedInviteLink}\n\nLooking forward to collaborating with you!`
-                        )}`
+                        `Invitation to join "${team.name}" on VoiceReminder`
+                      )}&body=${encodeURIComponent(
+                        `Hi,\n\nYou have been invited to join the team "${team.name}" on VoiceReminder.\n\nClick the link below to accept and join:\n\n${generatedInviteLink}\n\nLooking forward to collaborating with you!`
+                      )}`
                       : "#"
                   }
                   onClick={(e) => {

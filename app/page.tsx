@@ -196,12 +196,16 @@ export default function DashboardPage() {
     }
   }, [isEditProfileOpen]);
 
-  // Lists section expansion state (initially 3 lists, Show More / Show Less)
+  // Section expansion states (initially 5 items, Show More / Show Less)
   const [isListsExpanded, setIsListsExpanded] = useState(false);
+  const [isNotesExpanded, setIsNotesExpanded] = useState(false);
+  const [isPinnedExpanded, setIsPinnedExpanded] = useState(false);
 
   useEffect(() => {
     setIsListsExpanded(false);
-  }, [activeTab, searchQuery, selectedTag]);
+    setIsNotesExpanded(false);
+    setIsPinnedExpanded(false);
+  }, [activeTab, searchQuery, selectedTag, listSubTab]);
 
   // Real-time ticker to transition upcoming reminders to overdue dynamically as time passes
   const [currentTime, setCurrentTime] = useState(0);
@@ -876,43 +880,16 @@ export default function DashboardPage() {
               />
             )}
 
-            {/* Pinned Non-Reminder Items (Notes & Lists) */}
+            {/* Pinned Non-Reminder Items (Notes & Lists) - 5 by default with Show More / Show Less */}
             {pinnedNonReminders.length > 0 && (
               <div className="space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
                   📌 Pinned Items ({pinnedNonReminders.length})
                 </h2>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {pinnedNonReminders.map((item) => (
-                    <ItemCard
-                      key={item._id}
-                      item={item as ItemRecord}
-                      currentUserId={user?._id}
-                      onEdit={setEditingItem}
-                      isHighlighted={targetReminderId === item._id}
-                      onListCompleted={handleListCompleted}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Lists Section: Initially display 3 lists. If > 3 lists exist, display Show More... with ellipsis, scrollable area, Show Less */}
-            {regularLists.length > 0 && (activeTab === "all" || activeTab === "list") && (
-              <div className="space-y-3">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1.5">
-                  <span>
-                    {activeTab === "list" && listSubTab === "completed"
-                      ? `✓ Completed Lists (${regularLists.length})`
-                      : `📋 Lists (${regularLists.length})`}
-                  </span>
-                </h2>
-
-                {/* Display 3 lists initially, or all lists when expanded (no scroll container) */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {(isListsExpanded
-                    ? regularLists
-                    : regularLists.slice(0, 3)
+                  {(isPinnedExpanded
+                    ? pinnedNonReminders
+                    : pinnedNonReminders.slice(0, 5)
                   ).map((item) => (
                     <ItemCard
                       key={item._id}
@@ -925,8 +902,61 @@ export default function DashboardPage() {
                   ))}
                 </div>
 
-                {/* If more than 3 lists exist */}
-                {regularLists.length > 3 && (
+                {/* If more than 5 pinned items exist */}
+                {pinnedNonReminders.length > 5 && (
+                  <div className="flex justify-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsPinnedExpanded(!isPinnedExpanded)}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-200/90 dark:border-white/[0.08] bg-white dark:bg-[#161726] px-4 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-zinc-50 dark:hover:bg-[#1e1f32] shadow-2xs transition-all cursor-pointer"
+                    >
+                      {isPinnedExpanded ? (
+                        <>
+                          <span>Show Less</span>
+                          <ChevronUp className="h-3.5 w-3.5" />
+                        </>
+                      ) : (
+                        <>
+                          <span>Show More... ({pinnedNonReminders.length - 5} remaining)</span>
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Lists Section: Initially display 5 lists. If > 5 lists exist, display Show More... / Show Less */}
+            {regularLists.length > 0 && (activeTab === "all" || activeTab === "list") && (
+              <div className="space-y-3">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1.5">
+                  <span>
+                    {activeTab === "list" && listSubTab === "completed"
+                      ? `✓ Completed Lists (${regularLists.length})`
+                      : `📋 Lists (${regularLists.length})`}
+                  </span>
+                </h2>
+
+                {/* Display 5 lists initially, or all lists when expanded */}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {(isListsExpanded
+                    ? regularLists
+                    : regularLists.slice(0, 5)
+                  ).map((item) => (
+                    <ItemCard
+                      key={item._id}
+                      item={item as ItemRecord}
+                      currentUserId={user?._id}
+                      onEdit={setEditingItem}
+                      isHighlighted={targetReminderId === item._id}
+                      onListCompleted={handleListCompleted}
+                    />
+                  ))}
+                </div>
+
+                {/* If more than 5 lists exist */}
+                {regularLists.length > 5 && (
                   <div className="flex justify-center pt-1">
                     <button
                       type="button"
@@ -940,7 +970,7 @@ export default function DashboardPage() {
                         </>
                       ) : (
                         <>
-                          <span>Show More... ({regularLists.length - 3} remaining)</span>
+                          <span>Show More... ({regularLists.length - 5} remaining)</span>
                           <ChevronDown className="h-3.5 w-3.5" />
                         </>
                       )}
@@ -950,14 +980,17 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {/* Notes Section: Display all notes without limiting the number of notes */}
+            {/* Notes Section: Initially display 5 notes. If > 5 notes exist, display Show More... / Show Less */}
             {regularNotes.length > 0 && (activeTab === "all" || activeTab === "note") && (
               <div className="space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-sky-600 dark:text-sky-400 flex items-center gap-1.5">
                   <span>📝 Notes ({regularNotes.length})</span>
                 </h2>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {regularNotes.map((item) => (
+                  {(isNotesExpanded
+                    ? regularNotes
+                    : regularNotes.slice(0, 5)
+                  ).map((item) => (
                     <ItemCard
                       key={item._id}
                       item={item as ItemRecord}
@@ -968,6 +1001,29 @@ export default function DashboardPage() {
                     />
                   ))}
                 </div>
+
+                {/* If more than 5 notes exist */}
+                {regularNotes.length > 5 && (
+                  <div className="flex justify-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsNotesExpanded(!isNotesExpanded)}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-200/90 dark:border-white/[0.08] bg-white dark:bg-[#161726] px-4 py-2 text-xs font-semibold text-sky-600 dark:text-sky-400 hover:bg-zinc-50 dark:hover:bg-[#1e1f32] shadow-2xs transition-all cursor-pointer"
+                    >
+                      {isNotesExpanded ? (
+                        <>
+                          <span>Show Less</span>
+                          <ChevronUp className="h-3.5 w-3.5" />
+                        </>
+                      ) : (
+                        <>
+                          <span>Show More... ({regularNotes.length - 5} remaining)</span>
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Lock, Loader2, CheckCircle2, AlertCircle, ArrowLeft } from "lucide-react";
+import { Lock, Loader2, CheckCircle2, AlertCircle, ArrowLeft, Eye, EyeOff } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { validateResetTokenAction, resetPasswordAction } from "@/app/actions/auth";
@@ -28,6 +28,8 @@ function ResetPasswordForm() {
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -168,30 +170,60 @@ function ResetPasswordForm() {
                 <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                   New Password
                 </label>
-                <Input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="At least 6 characters"
-                  required
-                  disabled={isSubmitting}
-                  className="rounded-xl border-zinc-300 dark:border-white/10 dark:bg-[#1a1b2e] focus-visible:border-purple-600 focus-visible:ring-purple-600/20"
-                />
+                <div className="relative">
+                  <Input
+                    type={showNewPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="At least 6 characters"
+                    required
+                    disabled={isSubmitting}
+                    className="pr-10 rounded-xl border-zinc-300 dark:border-white/10 dark:bg-[#1a1b2e] focus-visible:border-purple-600 focus-visible:ring-purple-600/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors cursor-pointer"
+                    tabIndex={-1}
+                    aria-label={showNewPassword ? "Hide password" : "Show password"}
+                  >
+                    {showNewPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                   Confirm New Password
                 </label>
-                <Input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Re-enter your new password"
-                  required
-                  disabled={isSubmitting}
-                  className="rounded-xl border-zinc-300 dark:border-white/10 dark:bg-[#1a1b2e] focus-visible:border-purple-600 focus-visible:ring-purple-600/20"
-                />
+                <div className="relative">
+                  <Input
+                    type={showConfirmPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Re-enter your new password"
+                    required
+                    disabled={isSubmitting}
+                    className="pr-10 rounded-xl border-zinc-300 dark:border-white/10 dark:bg-[#1a1b2e] focus-visible:border-purple-600 focus-visible:ring-purple-600/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors cursor-pointer"
+                    tabIndex={-1}
+                    aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
               </div>
 
               <Button

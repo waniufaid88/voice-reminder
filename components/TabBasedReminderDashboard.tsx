@@ -65,6 +65,13 @@ export function TabBasedReminderDashboard({
     }
   }, [targetItem, currentTime]);
 
+  // Reset pagination limits to 5 when search or tag filter changes
+  useEffect(() => {
+    setUpcomingLimit(5);
+    setOverdueLimit(5);
+    setCompletedLimit(5);
+  }, [searchQuery, selectedTag]);
+
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -186,6 +193,16 @@ export function TabBasedReminderDashboard({
       setOverdueLimit((prev) => prev + 5);
     } else if (activeTab === "completed") {
       setCompletedLimit((prev) => prev + 5);
+    }
+  };
+
+  const handleShowLess = () => {
+    if (activeTab === "upcoming") {
+      setUpcomingLimit(5);
+    } else if (activeTab === "overdue") {
+      setOverdueLimit(5);
+    } else if (activeTab === "completed") {
+      setCompletedLimit(5);
     }
   };
 
@@ -395,21 +412,43 @@ export function TabBasedReminderDashboard({
                       : "completed"}{" "}
                   reminders
                 </span>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleLoadMore}
-                  className="w-full sm:w-auto h-9 text-xs font-semibold px-4 cursor-pointer"
-                >
-                  Load More (+{Math.min(5, totalCount - items.length)}) ↓
-                </Button>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  {currentLimit > 5 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleShowLess}
+                      className="flex-1 sm:flex-none h-9 text-xs font-semibold px-3 cursor-pointer"
+                    >
+                      Show Less ↑
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleLoadMore}
+                    className="flex-1 sm:flex-none h-9 text-xs font-semibold px-4 cursor-pointer"
+                  >
+                    Show More (+{Math.min(5, totalCount - items.length)}) ↓
+                  </Button>
+                </div>
               </div>
             ) : totalCount > 5 ? (
-              <div className="text-center pt-2">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-zinc-200/70 dark:border-zinc-800">
                 <span className="text-xs text-zinc-400 font-medium">
                   Showing all {totalCount} {activeTab} reminders
                 </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleShowLess}
+                  className="w-full sm:w-auto h-9 text-xs font-semibold px-3 cursor-pointer"
+                >
+                  Show Less ↑
+                </Button>
               </div>
             ) : null}
           </>

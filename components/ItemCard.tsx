@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import toast from "react-hot-toast";
 import {
@@ -182,6 +182,20 @@ export function ItemCard({
   const totalCount = item.checklist?.length || 0;
   const progressPercent =
     totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
+  // Split checklist items: pending at top, completed at bottom
+  const pendingChecklist = useMemo<NonNullable<ItemRecord["checklist"]>>(
+    () => item.checklist?.filter((ci) => !ci.completed) || [],
+    [item.checklist]
+  );
+  const completedChecklist = useMemo<NonNullable<ItemRecord["checklist"]>>(
+    () => item.checklist?.filter((ci) => ci.completed) || [],
+    [item.checklist]
+  );
+  const sortedChecklist = useMemo<NonNullable<ItemRecord["checklist"]>>(
+    () => [...pendingChecklist, ...completedChecklist],
+    [pendingChecklist, completedChecklist]
+  );
 
   const handleTogglePin = async () => {
     try {
@@ -640,45 +654,59 @@ export function ItemCard({
             {totalCount > 0 && (
               <div className="h-2 w-full bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden">
                 <div
-                  className={`h-full rounded-full transition-all duration-500 ${
-                    progressPercent === 100
+                  className={`h-full rounded-full transition-all duration-500 ${progressPercent === 100
                       ? "bg-gradient-to-r from-emerald-500 to-teal-500 shadow-xs shadow-emerald-500/50"
                       : "bg-gradient-to-r from-purple-500 to-indigo-500"
-                  }`}
+                    }`}
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
             )}
 
-            {/* Checklist Items */}
+            {/* Checklist Items: Pending at top, Completed at bottom */}
             {item.checklist && item.checklist.length > 0 && (
               <div className="space-y-1.5 pt-1">
                 {(isChecklistExpanded
-                  ? item.checklist
-                  : item.checklist.slice(0, 3)
-                ).map((ci) => (
-                  <label
-                    key={ci.id}
-                    className="flex items-start gap-2.5 cursor-pointer select-none rounded-lg p-1 hover:bg-zinc-50 dark:hover:bg-white/[0.03] transition-colors"
-                  >
-                    <Checkbox
-                      checked={ci.completed}
-                      onCheckedChange={() => handleToggleChecklist(ci.id, ci.completed)}
-                      className="mt-0.5"
-                    />
-                    <span
-                      className={`text-xs break-words ${ci.completed
-                        ? "line-through text-zinc-400 dark:text-zinc-500"
-                        : "text-zinc-800 dark:text-zinc-200"
-                        }`}
-                    >
-                      {ci.text}
-                    </span>
-                  </label>
-                ))}
+                  ? sortedChecklist
+                  : sortedChecklist.slice(0, 5)
+                ).map((ci, idx) => {
+                  const isFirstCompleted =
+                    ci.completed &&
+                    pendingChecklist.length > 0 &&
+                    idx === pendingChecklist.length;
 
-                {/* Show More... / Show Less option if more than 3 items exist */}
-                {item.checklist.length > 3 && (
+                  return (
+                    <div key={ci.id}>
+                      {isFirstCompleted && (
+                        <div className="my-1.5 flex items-center gap-2">
+                          <div className="h-px flex-1 bg-zinc-200/80 dark:bg-white/[0.08]" />
+                          <span className="text-[10px] font-semibold text-zinc-400 dark:text-zinc-500">
+                            Completed ({completedChecklist.length})
+                          </span>
+                          <div className="h-px flex-1 bg-zinc-200/80 dark:bg-white/[0.08]" />
+                        </div>
+                      )}
+                      <label className="flex items-start gap-2.5 cursor-pointer select-none rounded-lg p-1 hover:bg-zinc-50 dark:hover:bg-white/[0.03] transition-colors">
+                        <Checkbox
+                          checked={ci.completed}
+                          onCheckedChange={() => handleToggleChecklist(ci.id, ci.completed)}
+                          className="mt-0.5"
+                        />
+                        <span
+                          className={`text-xs break-words ${ci.completed
+                            ? "line-through text-zinc-400 dark:text-zinc-500"
+                            : "text-zinc-800 dark:text-zinc-200"
+                            }`}
+                        >
+                          {ci.text}
+                        </span>
+                      </label>
+                    </div>
+                  );
+                })}
+
+                {/* Show More... / Show Less option if more than 5 items exist */}
+                {item.checklist.length > 5 && (
                   <button
                     type="button"
                     onClick={() => setIsChecklistExpanded(!isChecklistExpanded)}
@@ -691,7 +719,7 @@ export function ItemCard({
                       </>
                     ) : (
                       <>
-                        <span>Show More... (+{item.checklist.length - 3} items)</span>
+                        <span>Show More... (+{item.checklist.length - 5} items)</span>
                         <ChevronDown className="h-3 w-3" />
                       </>
                     )}

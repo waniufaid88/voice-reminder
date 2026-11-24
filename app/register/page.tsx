@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import toast from "react-hot-toast";
+import { Eye, EyeOff } from "lucide-react";
 
 import { registerSchema, RegisterInput } from "@/lib/validations/auth";
 import { registerAction } from "@/app/actions/auth";
@@ -35,6 +36,7 @@ function RegisterForm() {
   const initialEmail = searchParams.get("email") || "";
 
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const form = useForm<RegisterInput>({
     resolver: zodResolver(registerSchema),
@@ -109,7 +111,7 @@ function RegisterForm() {
                     <FormControl>
                       <Input
                         type="text"
-                        placeholder="John Doe"
+                        placeholder="Enter your name "
                         autoComplete="name"
                         disabled={isLoading}
                         {...field}
@@ -147,13 +149,29 @@ function RegisterForm() {
                   <FormItem>
                     <FormLabel>Password</FormLabel>
                     <FormControl>
-                      <Input
-                        type="password"
-                        placeholder="At least 6 characters"
-                        autoComplete="new-password"
-                        disabled={isLoading}
-                        {...field}
-                      />
+                      <div className="relative">
+                        <Input
+                          type={showPassword ? "text" : "password"}
+                          placeholder="At least 6 characters"
+                          autoComplete="new-password"
+                          disabled={isLoading}
+                          className="pr-10"
+                          {...field}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors cursor-pointer"
+                          tabIndex={-1}
+                          aria-label={showPassword ? "Hide password" : "Show password"}
+                        >
+                          {showPassword ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
                     </FormControl>
                     <FormMessage />
                   </FormItem>
