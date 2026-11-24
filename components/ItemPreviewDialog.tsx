@@ -29,6 +29,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Combobox } from "@/components/ui/combobox";
 
 import {
   Form,
@@ -580,53 +581,40 @@ export function ItemPreviewDialog({
 
           {/* Team / Personal Assignment for Multi Reminders */}
           {myTeams && myTeams.length > 0 && (
-            <div className="shrink-0 my-2.5 flex items-center justify-between gap-3 p-2.5 rounded-xl border border-zinc-200 dark:border-white/[0.08] bg-zinc-50/70 dark:bg-[#161726]">
+            <div className="shrink-0 my-2.5 space-y-1.5 p-2.5 rounded-xl border border-zinc-200 dark:border-white/[0.08] bg-zinc-50/70 dark:bg-[#161726]">
               <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Save to:
               </span>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={!selectedTeamId ? "default" : "outline"}
-                  onClick={() => {
-                    setSelectedTeamId(null);
-                    setIsAmbiguous(false);
-                  }}
-                  disabled={isSaving}
-                  className={`text-xs rounded-lg h-7 px-2.5 cursor-pointer ${!selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
-                    }`}
-                >
-                  👤 Personal
-                </Button>
-                <select
-                  value={selectedTeamId || ""}
-                  onChange={(e) => {
-                    setSelectedTeamId((e.target.value as Id<"teams">) || null);
-                    setIsAmbiguous(false);
-                  }}
-                  disabled={isSaving}
-                  className={`rounded-lg border px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer ${selectedTeamId
-                    ? "border-purple-600 bg-purple-50 text-purple-900 dark:bg-purple-950/60 dark:text-purple-200"
-                    : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#1f2034] text-zinc-600 dark:text-zinc-300"
-                    }`}
-                >
-                  <option value="">👥 Select Team (optional)</option>
-                  {myTeams.map((t) => {
-                    if (!t) return null;
-                    return (
-                      <option key={t._id} value={t._id}>
-                        👥 {t.name}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
+              <Combobox
+                value={selectedTeamId || "personal"}
+                onSelect={(val) => {
+                  setSelectedTeamId(val === "personal" ? null : (val as Id<"teams">));
+                  setIsAmbiguous(false);
+                }}
+                disabled={isSaving}
+                options={[
+                  {
+                    value: "personal",
+                    label: "Personal Reminder",
+                    icon: <span className="text-sm">👤</span>,
+                  },
+                  ...myTeams
+                    .filter((t): t is NonNullable<typeof t> => Boolean(t))
+                    .map((t) => ({
+                      value: t._id,
+                      label: `${t.name} (${t.userRole})`,
+                      icon: <span className="text-sm">👥</span>,
+                    })),
+                ]}
+                placeholder="Select destination (Personal or Team)..."
+                searchPlaceholder="Search personal or teams..."
+                emptyText="No teams match your search."
+              />
             </div>
           )}
 
           {/* Scrollable list of detected reminder cards */}
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3.5">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-3.5">
             {/* Voice recording audio playback if available */}
             {itemData?.audioPreviewUrl && (
               <div className="rounded-xl border border-zinc-200 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/50">
@@ -801,7 +789,7 @@ export function ItemPreviewDialog({
               className="flex flex-col flex-1 min-h-0 overflow-hidden mt-4"
             >
               {/* Scrollable Form Content */}
-              <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-2">
+              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pr-2">
 
                 {/* Category Tabs */}
                 <div>
@@ -909,47 +897,30 @@ export function ItemPreviewDialog({
                       <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
                         Assign To
                       </label>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={!selectedTeamId ? "default" : "outline"}
-                          onClick={() => {
-                            setSelectedTeamId(null);
-                            setIsAmbiguous(false);
-                          }}
-                          className={`text-xs rounded-xl h-8 cursor-pointer ${
-                            !selectedTeamId ? "bg-purple-600 text-white hover:bg-purple-700" : ""
-                          }`}
-                        >
-                          👤 Personal
-                        </Button>
-
-                        <div className="flex-1">
-                          <select
-                            value={selectedTeamId || ""}
-                            onChange={(e) => {
-                              setSelectedTeamId((e.target.value as Id<"teams">) || null);
-                              setIsAmbiguous(false);
-                            }}
-                            className={`w-full rounded-xl border px-3 py-1.5 text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
-                              selectedTeamId
-                                ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200"
-                                : "border-zinc-200 bg-white dark:border-white/[0.08] dark:bg-[#161726] text-zinc-600 dark:text-zinc-400"
-                            }`}
-                          >
-                            <option value="">👥 Select Team (optional)</option>
-                            {myTeams.map((t) => {
-                              if (!t) return null;
-                              return (
-                                <option key={t._id} value={t._id}>
-                                  👥 {t.name} ({t.userRole})
-                                </option>
-                              );
-                            })}
-                          </select>
-                        </div>
-                      </div>
+                      <Combobox
+                        value={selectedTeamId || "personal"}
+                        onSelect={(val) => {
+                          setSelectedTeamId(val === "personal" ? null : (val as Id<"teams">));
+                          setIsAmbiguous(false);
+                        }}
+                        options={[
+                          {
+                            value: "personal",
+                            label: "Personal Reminder",
+                            icon: <span className="text-sm">👤</span>,
+                          },
+                          ...myTeams
+                            .filter((t): t is NonNullable<typeof t> => Boolean(t))
+                            .map((t) => ({
+                              value: t._id,
+                              label: `${t.name} (${t.userRole})`,
+                              icon: <span className="text-sm">👥</span>,
+                            })),
+                        ]}
+                        placeholder="Select destination (Personal or Team)..."
+                        searchPlaceholder="Search personal or teams..."
+                        emptyText="No teams match your search."
+                      />
                     </div>
                   </div>
                 )}

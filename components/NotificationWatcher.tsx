@@ -508,7 +508,11 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
     const itemId = alertingItem._id;
     stopAlarm();
     try {
-      await snoozeReminder({ itemId, minutes });
+      await snoozeReminder({
+        itemId,
+        minutes,
+        userId: userId ?? undefined,
+      });
       // Clear local deduplication caches so snoozed reminder alerts cleanly when due
       for (const key of Array.from(notifiedIdsRef.current)) {
         if (key.startsWith(itemId)) {
@@ -527,8 +531,9 @@ export function NotificationWatcher({ userId }: NotificationWatcherProps) {
         } catch {}
       }
       toast.success(`Snoozed for ${minutes >= 60 ? `${minutes / 60} hour` : `${minutes} mins`} 💤`);
-    } catch {
-      toast.error("Failed to snooze reminder");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to snooze reminder";
+      toast.error(msg);
     } finally {
       setAlertingItem(null);
     }

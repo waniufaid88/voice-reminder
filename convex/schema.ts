@@ -63,6 +63,16 @@ export default defineSchema({
     creatorName: v.optional(v.string()),
     deletedByUserIds: v.optional(v.array(v.id("users"))),
     completedByUserIds: v.optional(v.array(v.id("users"))),
+    completionRecords: v.optional(
+      v.array(
+        v.object({
+          userId: v.id("users"),
+          userName: v.optional(v.string()),
+          completedAt: v.number(),
+          reason: v.optional(v.string()),
+        })
+      )
+    ),
 
     createdAt: v.number(),
     updatedAt: v.number(),

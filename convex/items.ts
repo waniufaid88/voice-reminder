@@ -398,10 +398,41 @@ export const update = mutation({
 });
 
 export const togglePin = mutation({
-  args: { itemId: v.id("items") },
+  args: {
+    itemId: v.id("items"),
+    userId: v.optional(v.id("users")),
+  },
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
     if (!item) throw new Error("Item not found");
+
+    if (item.teamId && args.userId) {
+      const isCreator = item.userId === args.userId;
+      let isAuthorized = isCreator;
+
+      if (!isAuthorized) {
+        const membership = await ctx.db
+          .query("teamMembers")
+          .withIndex("by_teamId_userId", (q) =>
+            q.eq("teamId", item.teamId!).eq("userId", args.userId!)
+          )
+          .first();
+
+        if (membership && (membership.role === "owner" || membership.role === "admin")) {
+          isAuthorized = true;
+        } else {
+          const team = await ctx.db.get(item.teamId);
+          if (team && team.createdById === args.userId) {
+            isAuthorized = true;
+          }
+        }
+      }
+
+      if (!isAuthorized) {
+        throw new Error("Only the reminder creator, team admin, or team owner can pin/unpin this reminder.");
+      }
+    }
+
     const nextPinned = !Boolean(item.isPinned);
     await ctx.db.patch(args.itemId, {
       isPinned: nextPinned,
@@ -439,6 +470,7 @@ export const toggleReminderStatus = mutation({
     itemId: v.id("items"),
     targetStatus: v.optional(v.union(v.literal("pending"), v.literal("completed"))),
     userId: v.optional(v.id("users")),
+    reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
@@ -457,16 +489,33 @@ export const toggleReminderStatus = mutation({
             : "completed";
 
       if (targetStatus === "completed" && !userCompleted) {
+        const user = await ctx.db.get(args.userId);
+        const userName = user?.name || user?.email || "Team member";
+        const currentRecords = item.completionRecords || [];
+        const filteredRecords = currentRecords.filter((r) => r.userId !== args.userId);
+        const newRecord = {
+          userId: args.userId,
+          userName,
+          completedAt: Date.now(),
+          reason: args.reason?.trim() ? args.reason.trim() : undefined,
+        };
+        const newRecords = [...filteredRecords, newRecord];
         const newCompleted = [...currentCompleted, args.userId];
+
         await ctx.db.patch(args.itemId, {
           completedByUserIds: newCompleted,
+          completionRecords: newRecords,
           updatedAt: Date.now(),
         });
         return { isRecurringAdvanced: false, status: "completed" };
       } else if (targetStatus === "pending" && userCompleted) {
         const newCompleted = currentCompleted.filter((id) => id !== args.userId);
+        const currentRecords = item.completionRecords || [];
+        const newRecords = currentRecords.filter((r) => r.userId !== args.userId);
+
         await ctx.db.patch(args.itemId, {
           completedByUserIds: newCompleted,
+          completionRecords: newRecords,
           updatedAt: Date.now(),
         });
         return { isRecurringAdvanced: false, status: "pending" };
@@ -632,10 +681,38 @@ export const snoozeReminder = mutation({
   args: {
     itemId: v.id("items"),
     minutes: v.number(),
+    userId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
     if (!item) throw new Error("Item not found");
+
+    if (item.teamId && args.userId) {
+      const isCreator = item.userId === args.userId;
+      let isAuthorized = isCreator;
+
+      if (!isAuthorized) {
+        const membership = await ctx.db
+          .query("teamMembers")
+          .withIndex("by_teamId_userId", (q) =>
+            q.eq("teamId", item.teamId!).eq("userId", args.userId!)
+          )
+          .first();
+
+        if (membership && (membership.role === "owner" || membership.role === "admin")) {
+          isAuthorized = true;
+        } else {
+          const team = await ctx.db.get(item.teamId);
+          if (team && team.createdById === args.userId) {
+            isAuthorized = true;
+          }
+        }
+      }
+
+      if (!isAuthorized) {
+        throw new Error("Only the reminder creator, team admin, or team owner can snooze this reminder.");
+      }
+    }
 
     const now = Date.now();
     const newDueDate = now + args.minutes * 60 * 1000;

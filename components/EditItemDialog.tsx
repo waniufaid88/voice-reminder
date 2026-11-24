@@ -11,6 +11,7 @@ import { Id } from "@/convex/_generated/dataModel";
 import { ItemRecord } from "./ItemCard";
 import { RecurrenceSelector } from "./RecurrenceSelector";
 import { DateTimePicker12h } from "./DateTimePicker12h";
+import { Combobox } from "@/components/ui/combobox";
 import { formatLocalDatetime, parseLocalDatetime } from "@/lib/date-utils";
 import { parseNaturalReminder } from "@/lib/natural-date-parser";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
@@ -23,6 +24,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { CheckCircle2 } from "lucide-react";
 import {
   Form,
   FormField,
@@ -217,8 +219,43 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
       <Form {...form}>
         <form
           onSubmit={handleSubmit(onSubmit)}
-          className="mt-4 space-y-4 max-h-[75vh] overflow-y-auto pr-1"
+          className="mt-4 space-y-4 max-h-[75vh] overflow-y-auto overflow-x-hidden pr-1"
         >
+          {/* Completion Notes (for team reminders) */}
+          {item?.completionRecords && item.completionRecords.length > 0 && (
+            <div className="space-y-2 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 p-3 border border-emerald-200/60 dark:border-emerald-800/30">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Completion History & Notes</span>
+              </div>
+              <div className="space-y-2">
+                {item.completionRecords.map((record) => (
+                  <div key={record.userId} className="text-xs space-y-0.5">
+                    <div className="flex items-center gap-1.5 text-[11px]">
+                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                        {userId && String(record.userId) === String(userId)
+                          ? "You"
+                          : record.userName || "Teammate"}
+                      </span>
+                      <span className="text-[10px] text-zinc-400">
+                        • {new Date(record.completedAt).toLocaleString()}
+                      </span>
+                    </div>
+                    {record.reason ? (
+                      <p className="text-zinc-600 dark:text-zinc-300 pl-2 border-l-2 border-emerald-500/50 text-[11px] italic bg-white/50 dark:bg-black/20 py-0.5 rounded-r">
+                        &ldquo;{record.reason}&rdquo;
+                      </p>
+                    ) : (
+                      <p className="text-zinc-400 text-[10px] pl-2 italic">
+                        (No reason provided)
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Category Tabs: Locked to Reminder if assigned to a team */}
           {selectedTeamId !== "personal" ? (
             <div className="flex items-center gap-2 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/40 px-3 py-2 text-xs font-semibold text-purple-900 dark:text-purple-200">
@@ -286,45 +323,36 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
             </div>
           )}
 
-          {/* Scope / Team Assignment: Only visible for reminders */}
+          {/* Scope / Team Assignment: Only visible for reminders when user has teams */}
           {currentType === "reminder" && myTeams && myTeams.length > 0 && (
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
-                Destination / Scope
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                Destination / Team
               </label>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedTeamId("personal")}
-                  className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${
-                    selectedTeamId === "personal"
-                      ? "border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 font-semibold"
-                      : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-700"
-                  }`}
-                >
-                  👤 Personal
-                </button>
-                {myTeams.map((team) => {
-                  if (!team) return null;
-                  return (
-                    <button
-                      key={team._id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedTeamId(team._id);
-                        setValue("type", "reminder", { shouldValidate: true });
-                      }}
-                      className={`rounded-xl px-3 py-1.5 text-xs font-medium border transition-colors cursor-pointer ${
-                        selectedTeamId === team._id
-                          ? "border-purple-600 bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 font-semibold"
-                          : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-700"
-                      }`}
-                    >
-                      👥 {team.name}
-                    </button>
-                  );
-                })}
-              </div>
+              <Combobox
+                value={selectedTeamId}
+                onSelect={(val) => {
+                  setSelectedTeamId(val as Id<"teams"> | "personal");
+                  setValue("type", "reminder", { shouldValidate: true });
+                }}
+                options={[
+                  {
+                    value: "personal",
+                    label: "Personal Reminder",
+                    icon: <span className="text-sm">👤</span>,
+                  },
+                  ...myTeams
+                    .filter((t): t is NonNullable<typeof t> => Boolean(t))
+                    .map((team) => ({
+                      value: team._id,
+                      label: team.name,
+                      icon: <span className="text-sm">👥</span>,
+                    })),
+                ]}
+                placeholder="Select destination (Personal or Team)..."
+                searchPlaceholder="Search personal or teams..."
+                emptyText="No teams match your search."
+              />
             </div>
           )}
 

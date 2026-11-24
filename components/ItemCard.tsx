@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  CheckCircle2,
 } from "lucide-react";
 
 import { api } from "@/convex/_generated/api";
@@ -24,6 +25,7 @@ import { Id } from "@/convex/_generated/dataModel";
 import { AudioPlayer } from "./AudioPlayer";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { CompleteReminderDialog } from "./CompleteReminderDialog";
 import {
   formatReadableDueDate,
   formatAudioDuration,
@@ -62,6 +64,12 @@ export interface ItemRecord {
   completedByUserIds?: Id<"users">[];
   completedMembersCount?: number;
   totalMembersCount?: number;
+  completionRecords?: Array<{
+    userId: Id<"users">;
+    userName?: string;
+    completedAt: number;
+    reason?: string;
+  }>;
   createdAt: number;
 }
 
@@ -144,7 +152,7 @@ export function ItemCard({
   // Personal reminder: only creator can edit and delete
   // Team reminder:
   // - If completed or overdue: any team member can delete it (removes it exclusively for their view)
-  // - If upcoming: creator, team admin, and team owner can edit and delete
+  // - If active/upcoming: creator, team admin, and team owner can edit, snooze, pin, and delete
   const isCreator = Boolean(
     currentUserId && item.userId && String(item.userId) === String(currentUserId)
   );
@@ -155,6 +163,14 @@ export function ItemCard({
 
   const canEdit = !isTeamItem
     ? (!item.userId || !currentUserId || isCreator)
+    : (isCreator || isTeamAdminOrOwner);
+
+  const canSnooze = !isTeamItem
+    ? canEdit
+    : (isCreator || isTeamAdminOrOwner);
+
+  const canPin = !isTeamItem
+    ? true
     : (isCreator || isTeamAdminOrOwner);
 
   const canDelete = !isTeamItem
@@ -170,6 +186,7 @@ export function ItemCard({
   const [isSnoozeOpen, setIsSnoozeOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTogglingReminder, setIsTogglingReminder] = useState(false);
+  const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
   const [isContentExpanded, setIsContentExpanded] = useState(false);
   const [isChecklistExpanded, setIsChecklistExpanded] = useState(false);
 
@@ -200,12 +217,15 @@ export function ItemCard({
   const handleTogglePin = async () => {
     try {
       const willPin = !Boolean(item.isPinned);
-      await togglePin({ itemId: item._id });
+      await togglePin({
+        itemId: item._id,
+        userId: currentUserId ? (currentUserId as Id<"users">) : undefined,
+      });
       setIsMenuOpen(false);
       toast.success(willPin ? "Pinned to top 📌" : "Unpinned item");
-    } catch (err) {
-      console.error("Failed to toggle pin:", err);
-      toast.error("Failed to update pin");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update pin";
+      toast.error(msg);
     }
   };
 
@@ -231,6 +251,13 @@ export function ItemCard({
 
   const handleToggleReminder = async () => {
     if (isTogglingReminder) return;
+
+    // Team reminder being completed: open the optional reason dialog
+    if (isTeamItem && !isCompletedReminder) {
+      setIsCompleteDialogOpen(true);
+      return;
+    }
+
     setIsTogglingReminder(true);
     const targetStatus = isCompletedReminder ? "pending" : "completed";
     try {
@@ -259,11 +286,41 @@ export function ItemCard({
     }
   };
 
+  const handleConfirmTeamComplete = async (reason?: string) => {
+    if (isTogglingReminder) return;
+    setIsTogglingReminder(true);
+    try {
+      await toggleReminderStatus({
+        itemId: item._id,
+        targetStatus: "completed",
+        userId: currentUserId ? (currentUserId as Id<"users">) : undefined,
+        reason,
+      });
+      setIsCompleteDialogOpen(false);
+      toast.success("Reminder completed! 🎉");
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to update reminder";
+      toast.error(msg);
+    } finally {
+      setIsTogglingReminder(false);
+    }
+  };
+
   const handleSnooze = async (minutes: number, label: string) => {
-    await snoozeReminder({ itemId: item._id, minutes });
-    setIsSnoozeOpen(false);
-    setIsMenuOpen(false);
-    toast.success(`Snoozed for ${label} ⏰`);
+    try {
+      await snoozeReminder({
+        itemId: item._id,
+        minutes,
+        userId: currentUserId ? (currentUserId as Id<"users">) : undefined,
+      });
+      setIsSnoozeOpen(false);
+      setIsMenuOpen(false);
+      toast.success(`Snoozed for ${label} ⏰`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to snooze reminder";
+      toast.error(msg);
+    }
   };
 
   const handleToggleChecklist = async (ciId: string, currentCompleted: boolean) => {
@@ -428,17 +485,19 @@ export function ItemCard({
           {/* Pin & 3-Dots actions */}
           <div className="flex items-center gap-1">
             {/* Pin Toggle */}
-            <button
-              type="button"
-              onClick={handleTogglePin}
-              title={item.isPinned ? "Unpin item" : "Pin to top"}
-              className={`rounded-lg p-1.5 transition-colors cursor-pointer ${item.isPinned
-                ? "text-rose-500 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40"
-                : "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/[0.04]"
-                }`}
-            >
-              <Pin className={`h-3.5 w-3.5 ${item.isPinned ? "fill-current" : ""}`} />
-            </button>
+            {canPin && (
+              <button
+                type="button"
+                onClick={handleTogglePin}
+                title={item.isPinned ? "Unpin item" : "Pin to top"}
+                className={`rounded-lg p-1.5 transition-colors cursor-pointer ${item.isPinned
+                  ? "text-rose-500 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40"
+                  : "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/[0.04]"
+                  }`}
+              >
+                <Pin className={`h-3.5 w-3.5 ${item.isPinned ? "fill-current" : ""}`} />
+              </button>
+            )}
 
             {/* 3-Dots Dropdown Trigger */}
             <div className="relative">
@@ -576,7 +635,7 @@ export function ItemCard({
                     : "Done"}
               </Button>
 
-              {!isCompletedReminder && (
+              {!isCompletedReminder && canSnooze && (
                 <div className="relative">
                   <button
                     type="button"
@@ -629,6 +688,44 @@ export function ItemCard({
               <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
                 {item.content}
               </p>
+            )}
+
+            {/* Team Completion Notes / Reasons */}
+            {isTeamItem && item.completionRecords && item.completionRecords.length > 0 && (
+              <div className="space-y-1.5 rounded-xl bg-zinc-50 dark:bg-white/[0.03] p-2.5 border border-zinc-200/70 dark:border-white/[0.08]">
+                <p className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                  <span>Completion Notes</span>
+                </p>
+                <div className="space-y-1.5">
+                  {item.completionRecords.map((record) => (
+                    <div
+                      key={record.userId}
+                      className="text-xs text-zinc-600 dark:text-zinc-300 flex flex-col gap-0.5"
+                    >
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                          {currentUserId && String(record.userId) === String(currentUserId)
+                            ? "You"
+                            : record.userName || "Teammate"}
+                        </span>
+                        <span className="text-[10px] text-zinc-400">
+                          • {formatCreatedDate(record.completedAt)}
+                        </span>
+                      </div>
+                      {record.reason ? (
+                        <p className="text-zinc-600 dark:text-zinc-300 pl-2 border-l-2 border-emerald-500/50 text-[11px] italic bg-zinc-100/60 dark:bg-white/[0.04] py-0.5 rounded-r">
+                          &ldquo;{record.reason}&rdquo;
+                        </p>
+                      ) : (
+                        <p className="text-zinc-400 text-[10px] pl-2 italic">
+                          (No reason provided)
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -834,6 +931,16 @@ export function ItemCard({
             </span>
           ))}
         </div>
+      )}
+      {/* Complete Reminder Dialog (for team reminders) */}
+      {isTeamItem && (
+        <CompleteReminderDialog
+          isOpen={isCompleteDialogOpen}
+          onClose={() => setIsCompleteDialogOpen(false)}
+          onConfirm={handleConfirmTeamComplete}
+          reminderTitle={item.title}
+          isSubmitting={isTogglingReminder}
+        />
       )}
     </div>
   );
