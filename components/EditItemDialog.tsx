@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { CheckCircle2 } from "lucide-react";
+import { cleanChecklistItem } from "@/lib/checklist-cleaner";
 import {
   Form,
   FormField,
@@ -128,13 +129,14 @@ export function EditItemDialog({ item, userId, onClose }: EditItemDialogProps) {
 
   const handleAddChecklistItem = () => {
     if (!newChecklistText.trim()) return;
+    const cleaned = cleanChecklistItem(newChecklistText.trim()) || newChecklistText.trim();
     setValue(
       "checklist",
       [
         ...currentChecklist,
         {
           id: Date.now().toString(),
-          text: newChecklistText.trim(),
+          text: cleaned,
           completed: false,
         },
       ],

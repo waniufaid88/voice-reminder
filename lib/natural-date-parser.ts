@@ -5,6 +5,8 @@
  * Fully timezone-aware: immune to server/production UTC timezone variance.
  */
 
+import { cleanChecklistItem, splitChecklistItems } from "./checklist-cleaner";
+
 export interface ParsedNaturalReminder {
   isReminder: boolean;
   title: string;
@@ -108,18 +110,12 @@ export function parseNaturalReminder(
   const userMinutes = userWallClockDate.getUTCMinutes();
 
   // 1. Check if input is likely a reminder.
-  // Use word-boundary patterns instead of lower.includes("at "),
-  // because "at " also appears inside words such as "that ".
-  const reminderIntentPattern =
-    /\b(remind|reminder|schedule|appointment|meeting|deadline|alarm|due date)\b/i;
-
-  // Relative dates and recurring schedules
-  const schedulingPattern =
-    /\b(tomorrow|tmrw|tonight|day after tomorrow|every day|everyday|each day|daily|weekdays|weekends)\b/i;
-
-  // Specific weekday references
-  const weekdayPattern =
-    /\b(?:on|this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+  // Explicit reminder request keywords:
+  const explicitReminderPattern =
+    /\b(remind|reminder|alarm|due\s+date)\b/i.test(normalizedText) ||
+    /\b(?:don't|do\s+not)\s+let\s+me\s+forget\b/i.test(normalizedText) ||
+    /\b(?:alert|notify|ping|wake)\s+me\b/i.test(normalizedText) ||
+    /\b(schedule|set)\s+(?:a\s+)?(?:reminder|alarm)\b/i.test(normalizedText);
 
   // Specific times: 5 PM, 4:30 AM, at 10, in 2 hours
   const hasTimePattern =
@@ -127,11 +123,12 @@ export function parseNaturalReminder(
     /\bat\s+\d{1,2}(?::\d{2})?\b/i.test(normalizedText) ||
     /\bin\s+\d+\s*(?:minutes?|mins?|hours?|hrs?|days?)\b/i.test(normalizedText);
 
+  // Imperative action verbs: e.g. "call doctor at 5 PM", "pay bill tomorrow at 10 AM", "submit report on monday at 11 AM"
+  const isImperativeAction =
+    /^(?:please\s+)?(?:call|pay|submit|attend|meet|send|email|buy|pick\s+up|clean|wash|take|drink|check|finish|complete)\b/i.test(normalizedText);
+
   const isReminder =
-    reminderIntentPattern.test(normalizedText) ||
-    schedulingPattern.test(normalizedText) ||
-    weekdayPattern.test(normalizedText) ||
-    hasTimePattern;
+    explicitReminderPattern || (hasTimePattern && isImperativeAction);
 
   // 2. Detect Recurrence
   let recurrenceMode: "once" | "daily" | "custom" = "once";
@@ -620,19 +617,84 @@ export function generateSmartListInfo(rawText: string): {
 } {
   const lower = rawText.toLowerCase();
 
-  const itemStr = rawText
-    .replace(/^(?:i\s+need\s+to\s+buy|buy|get|purchase|list\s+of|shopping\s+for|todo\s+list\s+for)\s+/i, "")
-    .trim();
-
-  const items = itemStr
-    .split(/,|\band\b|\n/i)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !/^(?:and|also|item)$/i.test(s));
+  const items = splitChecklistItems(rawText);
 
   let title = "Checklist";
   let content = "Checklist of items.";
 
   if (
+    lower.includes("bathroom") ||
+    lower.includes("toilet") ||
+    lower.includes("toiletries")
+  ) {
+    title = "Bathroom Supplies";
+    content = "Bathroom supplies and toiletries to get.";
+  } else if (
+    lower.includes("vacation") ||
+    lower.includes("pack") ||
+    lower.includes("luggage") ||
+    lower.includes("trip") ||
+    lower.includes("travel") ||
+    (lower.includes("shirt") && lower.includes("jean"))
+  ) {
+    title = "Packing List";
+    content = "Items to pack for the trip.";
+  } else if (
+    lower.includes("school") ||
+    (lower.includes("notebook") && (lower.includes("pen") || lower.includes("pencil")))
+  ) {
+    title = "School Supplies";
+    content = "School supplies and stationery to get.";
+  } else if (
+    lower.includes("clean") ||
+    lower.includes("broom") ||
+    lower.includes("floor cleaner") ||
+    lower.includes("detergent") ||
+    lower.includes("garbage bag") ||
+    lower.includes("mop") ||
+    lower.includes("household")
+  ) {
+    title = "Cleaning Supplies";
+    content = "Cleaning items and supplies to get.";
+  } else if (
+    lower.includes("party") ||
+    lower.includes("birthday") ||
+    lower.includes("balloon") ||
+    lower.includes("candle") ||
+    lower.includes("celebration")
+  ) {
+    title = "Party Supplies";
+    content = "Party supplies and items to get.";
+  } else if (
+    lower.includes("bedsheet") ||
+    lower.includes("pillow") ||
+    lower.includes("curtain") ||
+    lower.includes("dustbin")
+  ) {
+    title = "Room Essentials";
+    content = "Items to buy for the room.";
+  } else if (
+    lower.includes("way to") ||
+    lower.includes("repair") ||
+    lower.includes("documents") ||
+    lower.includes("errand") ||
+    (lower.includes("office") && (lower.includes("drop") || lower.includes("parcel") || lower.includes("collect")))
+  ) {
+    title = "Daily Errands";
+    content = "Errands and tasks to complete.";
+  } else if (
+    lower.includes("pharmacy") ||
+    lower.includes("medicine") ||
+    lower.includes("parcel")
+  ) {
+    title = "Errands & Shopping";
+    content = "Errands and items to pick up.";
+  } else if (
+    lower.includes("dinner") ||
+    lower.includes("lunch") ||
+    lower.includes("paneer") ||
+    lower.includes("spices") ||
+    lower.includes("cream") ||
     lower.includes("milk") ||
     lower.includes("bread") ||
     lower.includes("egg") ||
@@ -641,20 +703,33 @@ export function generateSmartListInfo(rawText: string): {
     lower.includes("fruit") ||
     lower.includes("vegetable") ||
     lower.includes("buy ") ||
-    lower.includes("supermarket")
+    lower.includes("supermarket") ||
+    lower.includes("market") ||
+    lower.includes("apple") ||
+    lower.includes("soap") ||
+    lower.includes("shampoo") ||
+    lower.includes("toothpaste") ||
+    lower.includes("produce") ||
+    lower.includes("macaroni") ||
+    lower.includes("cheese") ||
+    lower.includes("biscuit") ||
+    lower.includes("rice") ||
+    lower.includes("flour") ||
+    lower.includes("oil") ||
+    lower.includes("salt") ||
+    lower.includes("tea")
   ) {
     title = "Grocery Shopping";
     content = "Shopping items to purchase.";
   } else if (
-    lower.includes("pack") ||
-    lower.includes("luggage") ||
-    lower.includes("trip") ||
-    lower.includes("travel")
+    lower.includes("office") ||
+    lower.includes("stationery")
   ) {
-    title = "Packing List";
-    content = "Items to pack for the trip.";
+    title = "Office Supplies";
+    content = "Office supplies and items to get.";
   } else if (
     lower.includes("todo") ||
+    lower.includes("to-do") ||
     lower.includes("task") ||
     lower.includes("work")
   ) {
@@ -667,25 +742,23 @@ export function generateSmartListInfo(rawText: string): {
 
   const checklist =
     items.length > 0
-      ? items.map((rawItem, idx) => {
-        const cleanedItem = rawItem
-          .replace(/^[-,•*]\s*/, "")
-          .replace(/[.,;]+$/, "")
-          .trim();
-
-        return {
+      ? items.map((cleanedItem, idx) => ({
           id: (idx + 1).toString(),
-          text: cleanedItem.charAt(0).toUpperCase() + cleanedItem.slice(1),
+          text: cleanedItem,
           completed: false,
-        };
-      })
-      : [
-        {
-          id: "1",
-          text: rawText.replace(/[.,;]+$/, "").trim(),
-          completed: false,
-        },
-      ];
+        }))
+      : (() => {
+          const single = cleanChecklistItem(rawText);
+          return single
+            ? [
+                {
+                  id: "1",
+                  text: single,
+                  completed: false,
+                },
+              ]
+            : [];
+        })();
 
   return { title, content, checklist };
 }

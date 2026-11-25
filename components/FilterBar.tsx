@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { Bell, List, FileText, Layers, Search, X, Users } from "lucide-react";
 
 interface FilterBarProps {
@@ -52,14 +53,39 @@ export function FilterBar({
 
   const placeholder = searchPlaceholder || defaultPlaceholder;
 
+  // Refs for auto-centering selected tab horizontally on mobile
+  const tabsContainerRef = useRef<HTMLDivElement>(null);
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  useEffect(() => {
+    const container = tabsContainerRef.current;
+    const activeBtn = tabRefs.current[activeTab];
+    if (container && activeBtn) {
+      const containerWidth = container.offsetWidth;
+      const tabLeft = activeBtn.offsetLeft;
+      const tabWidth = activeBtn.offsetWidth;
+      const targetScrollLeft = tabLeft - containerWidth / 2 + tabWidth / 2;
+      container.scrollTo({
+        left: Math.max(0, targetScrollLeft),
+        behavior: "smooth",
+      });
+    }
+  }, [activeTab]);
+
   return (
     <div className="space-y-3.5 select-none">
       {/* Desktop & Mobile Main Tabs Row */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         {/* Category Tabs: Scrollable on mobile, flex on desktop */}
-        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar py-1">
+        <div
+          ref={tabsContainerRef}
+          className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar py-1"
+        >
           {/* Reminders Tab */}
           <button
+            ref={(el) => {
+              tabRefs.current.reminder = el;
+            }}
             type="button"
             onClick={() => onTabChange("reminder")}
             className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
@@ -74,6 +100,9 @@ export function FilterBar({
 
           {/* Lists Tab */}
           <button
+            ref={(el) => {
+              tabRefs.current.list = el;
+            }}
             type="button"
             onClick={() => onTabChange("list")}
             className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
@@ -88,6 +117,9 @@ export function FilterBar({
 
           {/* Notes Tab */}
           <button
+            ref={(el) => {
+              tabRefs.current.note = el;
+            }}
             type="button"
             onClick={() => onTabChange("note")}
             className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
@@ -102,6 +134,9 @@ export function FilterBar({
 
           {/* All Tab */}
           <button
+            ref={(el) => {
+              tabRefs.current.all = el;
+            }}
             type="button"
             onClick={() => onTabChange("all")}
             className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
@@ -116,6 +151,9 @@ export function FilterBar({
 
           {/* Teams Tab - Prominently Highlighted */}
           <button
+            ref={(el) => {
+              tabRefs.current.teams = el;
+            }}
             type="button"
             onClick={() => onTabChange("teams")}
             className={`flex items-center gap-2 shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${

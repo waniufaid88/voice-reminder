@@ -9,6 +9,12 @@ import {
   generateSmartListInfo,
   generateSmartNoteInfo,
 } from "@/lib/natural-date-parser";
+import {
+  cleanChecklistItem,
+  splitChecklistItems,
+  isIntroductoryContext,
+  isNonItemSentence,
+} from "@/lib/checklist-cleaner";
 
 import { parseLocalDatetime } from "@/lib/date-utils";
 import { convexServer } from "@/lib/convex-server";
@@ -101,10 +107,10 @@ function hasExplicitReminderIntent(rawText: string): boolean {
 
   return (
     /\bremind\s+me\b/.test(text) ||
-    /\bset\s+(?:a\s+)?reminder\b/.test(text) ||
-    /\bdon't\s+let\s+me\s+forget\b/.test(text) ||
-    /\bdo\s+not\s+let\s+me\s+forget\b/.test(text) ||
-    /\balert\s+me\b/.test(text)
+    /\b(?:set|schedule|create)\s+(?:a\s+)?(?:reminder|alarm)\b/.test(text) ||
+    /\b(?:don't|do\s+not)\s+let\s+me\s+forget\b/.test(text) ||
+    /\b(?:alert|notify|ping|wake)\s+me\b/.test(text) ||
+    /\b(?:due\s+date|reminder\s+for)\b/.test(text)
   );
 }
 
@@ -115,17 +121,31 @@ function hasExplicitReminderIntent(rawText: string): boolean {
 function hasExplicitListIntent(rawText: string): boolean {
   const text = rawText.toLowerCase().trim();
 
+  // Exclude explicit learning goals, opinions, thoughts, or ideas
+  if (
+    /\b(?:want|need|plan)\s+to\s+learn\b/i.test(text) ||
+    /\b(?:learning\s+goal|my\s+idea\s+is|thought\s+about|learned\s+that|learned\s+about)\b/i.test(text)
+  ) {
+    return false;
+  }
+
   const patterns = [
-    // Shopping and purchasing.
+    // Shopping, purchasing, and needing items/commodities:
     /\b(?:buy|purchase|pick\s+up)\b/,
-    /\b(?:need|have|want)\s+to\s+buy\b/,
+    /\b(?:need|have|want)\s+to\s+(?:buy|get|purchase|pick\s+up)\b/,
+    /\b(?:i|we)?\s*(?:need|needs|want|wants)\b.+?(?:,|\band\b)/, // e.g. "I need 2 liters of milk, a dozen eggs, and 500g sugar"
     /\b(?:shopping|grocery)\s+list\b/,
 
-    // Packing.
+    // Quantity / measurement units common in shopping lists:
+    /\b(?:\d+\s*(?:liters?|litres?|kg|kilos?|grams?|g|pounds?|lbs?|bottles?|cans?|packs?|boxes?|packets?|pieces?)|a\s+dozen)\b/,
+
+    // Packing and travel items:
+    /\b(?:pack|bring)\b/,
     /\bthings?\s+to\s+pack\b/,
     /\bitems?\s+to\s+pack\b/,
     /\bpacking\s+list\b/,
     /\bthings?\s+to\s+bring\b/,
+    /\b(?:shirts?|pants?|jeans?|t-shirts?|socks?|shoes?|chargers?|passports?|clothes|undergarments?|jackets?|suitcases?|luggage|toiletries)\b/,
 
     // Explicit lists and checklists.
     /\b(?:make|create|prepare|start)\s+(?:(?:a|an|my|the)\s+)?(?:(?:shopping|grocery|packing|todo|to-do|task|work)\s+)?(?:list|checklist)\b/,
@@ -150,49 +170,57 @@ function hasExplicitListIntent(rawText: string): boolean {
     /\bmy\s+daily\s+plan\s*:/,
   ];
 
-  return patterns.some((pattern) => pattern.test(text));
+  if (patterns.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+
+  // Comma-separated commodity/grocery/packing/supplies lists without verbs:
+  const commodityKeywordPattern =
+    /\b(?:milk|eggs?|bread|butter|sugar|produce|vegetables?|fruits?|soap|shampoo|toothpaste|toothbrushes?|cheese|macaroni|paneer|curd|yogurt|tea|coffee|rice|flour|oil|salt|spices?|biscuits?|onions?|potatoes?|tomatoes?|apples?|bananas?|oranges?|chicken|meat|fish|curtains?|bedsheets?|pillows?|dustbins?|detergents?|cleaners?|brooms?|mops?|shirts?|jeans?|socks?|shoes?|chargers?|passports?|notebooks?|pens?|pencils?)\b/i;
+  if (commodityKeywordPattern.test(text) && splitChecklistItems(rawText).length >= 2) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
  * Deterministically extract items from sentences like:
- *
  * "Add notebook, pen and pencil to my school supplies list."
+ * "Put milk, eggs and bread in my grocery list."
+ * "Add macaroni and cheese to my shopping list."
  *
- * This avoids relying entirely on AI to extract checklist items.
+ * Uses splitChecklistItems to protect compound items like "macaroni and cheese"
+ * and preserve quantities and complete item descriptions.
  */
 function extractItemsFromAddToList(
   rawText: string
 ): { title: string; items: ChecklistItem[] } | null {
   const match = rawText.match(
-    /^\s*(?:please\s+)?(?:add|put|include)\s+(.+?)\s+(?:to|in|on)\s+(?:(?:my|the)\s+)?(.+?)\s+lists?\s*[.!?]*$/i
+    /^\s*(?:please\s+)?(?:add|put|include)\s+(.+?)\s+(?:to|in|on)\s+(?:(?:my|the)\s+)?(?:(.+?)\s+)?(?:lists?|checklists?)\s*[.!?]*$/i
   );
 
   if (!match) return null;
 
-  const rawItems = match[1].trim();
-  const rawListName = match[2].trim();
+  const rawItems = match[1]?.trim();
+  const rawListName = match[2]?.trim() || "";
 
-  if (!rawItems || !rawListName) return null;
+  if (!rawItems) return null;
 
-  const items = rawItems
-    .replace(/\s+and\s+/gi, ",")
-    .replace(/\s*&\s*/g, ",")
-    .split(",")
-    .map((item) =>
-      item.replace(/^[\s,]+|[\s,.!?]+$/g, "").trim()
-    )
-    .filter(Boolean);
+  const extracted = splitChecklistItems(rawItems);
+  if (extracted.length === 0) return null;
 
-  if (items.length === 0) return null;
-
-  const title = rawListName
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  let title = "Shopping List";
+  if (rawListName) {
+    title = rawListName
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
 
   return {
     title,
-    items: items.map((item, index) => ({
+    items: extracted.map((item, index) => ({
       id: String(index + 1),
       text: item,
       completed: false,
@@ -201,39 +229,196 @@ function extractItemsFromAddToList(
 }
 
 /**
- * Validate checklist items returned by Groq or the rule-based parser.
+ * Validate and clean checklist items returned by Groq or the rule-based parser.
+ * Filters out introductory context statements ("Today I have to go market"),
+ * past activities ("I went to the supermarket yesterday"),
+ * background context ("This weekend I am cleaning my house"),
+ * and strips conversational preambles ("I have to buy", "buy", "then I have buy")
+ * while preserving genuine items and quantities.
  */
 function normalizeChecklist(value: unknown): ChecklistItem[] {
   if (!Array.isArray(value)) return [];
 
-  return value
-    .map((item, index) => {
-      if (typeof item === "string") {
-        const text = item.trim();
+  const rawTexts: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string") {
+      rawTexts.push(item);
+    } else if (item && typeof item === "object") {
+      const entry = item as Record<string, unknown>;
+      if (entry.text) rawTexts.push(String(entry.text));
+    }
+  }
 
-        if (!text) return null;
+  const flattened: string[] = [];
+  for (const text of rawTexts) {
+    if (isNonItemSentence(text)) {
+      continue;
+    }
+    const split = splitChecklistItems(text);
+    if (split.length > 0) {
+      for (const s of split) {
+        if (!isNonItemSentence(s)) {
+          flattened.push(s);
+        }
+      }
+    } else {
+      const cleaned = cleanChecklistItem(text);
+      if (cleaned && !isNonItemSentence(cleaned)) {
+        flattened.push(cleaned);
+      }
+    }
+  }
 
-        return {
-          id: String(index + 1),
-          text,
-          completed: false,
-        };
+  return flattened.map((text, index) => ({
+    id: String(index + 1),
+    text,
+    completed: false,
+  }));
+}
+
+/**
+ * Reconciles the AI-generated checklist with the deterministic rule-based checklist.
+ * - Discards any items that originated exclusively from past activities or non-item sentences.
+ * - Replaces split compound item fragments with the complete compound item (e.g. "Macaroni" + "Cheese" -> "Macaroni and cheese").
+ * - Recovers any valid items from the rule-based extractor that the AI missed.
+ * - Sorts items according to their original position of appearance in rawText to preserve speech order.
+ * - Deduplicates items case-insensitively.
+ */
+function reconcileChecklists(
+  aiChecklist: ChecklistItem[],
+  ruleChecklist: ChecklistItem[],
+  rawText: string
+): ChecklistItem[] {
+  if (aiChecklist.length === 0) {
+    return ruleChecklist;
+  }
+  if (ruleChecklist.length === 0) {
+    return aiChecklist.filter((it) => !isNonItemSentence(it.text));
+  }
+
+  // 1. Identify non-item sentences (past activities, background context) in rawText
+  const nonItemSentences: string[] = [];
+  const textWithDecimals = rawText.replace(/(\d+)\.(\d+)/g, "$1__DOT__$2");
+  const sentences = textWithDecimals
+    .split(/(?:[.!?;:\n]+|\s+--\s+)/)
+    .map((s) => s.replace(/__DOT__/g, ".").trim())
+    .filter(Boolean);
+
+  for (const s of sentences) {
+    if (isNonItemSentence(s)) {
+      nonItemSentences.push(s.toLowerCase());
+    }
+  }
+
+  const actionableSentences = sentences
+    .filter((s) => !isNonItemSentence(s))
+    .map((s) => s.toLowerCase());
+
+  const validAiItems: ChecklistItem[] = [];
+  for (const aiItem of aiChecklist) {
+    const itemText = aiItem.text.trim();
+    if (!itemText || isNonItemSentence(itemText)) continue;
+
+    const lowerItem = itemText.toLowerCase();
+
+    // If an item appears ONLY in non-item sentences (and NOT in any actionable sentence), discard it!
+    const inActionable = actionableSentences.some((s) => s.includes(lowerItem));
+    const inNonItem = nonItemSentences.some((s) => s.includes(lowerItem));
+
+    if (inNonItem && !inActionable && nonItemSentences.length > 0) {
+      continue;
+    }
+
+    validAiItems.push(aiItem);
+  }
+
+  // 2. Check for compound items from ruleChecklist that AI might have split
+  const mergedItems: { text: string; rawIndex: number }[] = [];
+  const coveredRuleIndices = new Set<number>();
+  const replacedAiIndices = new Set<number>();
+
+  for (let rIdx = 0; rIdx < ruleChecklist.length; rIdx++) {
+    const ruleItem = ruleChecklist[rIdx];
+    const ruleText = ruleItem.text;
+    const lowerRule = ruleText.toLowerCase();
+
+    const isCompound = /\b(?:and|&)\b/i.test(ruleText);
+    if (isCompound) {
+      const matchedAiIndices: number[] = [];
+      const parts = ruleText.split(/\s+(?:and|&)\s+/i).map((p) => p.trim().toLowerCase());
+      for (let aIdx = 0; aIdx < validAiItems.length; aIdx++) {
+        const lowerAi = validAiItems[aIdx].text.toLowerCase();
+        if (parts.some((p) => lowerAi === p || lowerAi.includes(p))) {
+          matchedAiIndices.push(aIdx);
+        }
       }
 
-      if (!item || typeof item !== "object") return null;
+      if (matchedAiIndices.length >= 2) {
+        matchedAiIndices.forEach((idx) => replacedAiIndices.add(idx));
+        coveredRuleIndices.add(rIdx);
+        const rawIndex = rawText.toLowerCase().indexOf(lowerRule);
+        mergedItems.push({ text: ruleText, rawIndex: rawIndex !== -1 ? rawIndex : 9999 });
+      }
+    }
+  }
 
-      const entry = item as Record<string, unknown>;
-      const itemText = String(entry.text || "").trim();
+  // 3. Add AI items (except those replaced by compound items)
+  for (let aIdx = 0; aIdx < validAiItems.length; aIdx++) {
+    if (replacedAiIndices.has(aIdx)) continue;
+    const aiItem = validAiItems[aIdx];
+    const lowerAi = aiItem.text.toLowerCase();
+    const rawIndex = rawText.toLowerCase().indexOf(lowerAi);
 
-      if (!itemText) return null;
+    mergedItems.push({
+      text: aiItem.text,
+      rawIndex: rawIndex !== -1 ? rawIndex : 9999 + aIdx,
+    });
 
-      return {
-        id: String(entry.id || index + 1),
-        text: itemText,
-        completed: Boolean(entry.completed),
-      };
-    })
-    .filter((item): item is ChecklistItem => item !== null);
+    for (let rIdx = 0; rIdx < ruleChecklist.length; rIdx++) {
+      const lowerRule = ruleChecklist[rIdx].text.toLowerCase();
+      if (
+        lowerAi === lowerRule ||
+        lowerAi.includes(lowerRule) ||
+        lowerRule.includes(lowerAi)
+      ) {
+        coveredRuleIndices.add(rIdx);
+      }
+    }
+  }
+
+  // 4. Recover any rule items that AI completely missed!
+  for (let rIdx = 0; rIdx < ruleChecklist.length; rIdx++) {
+    if (coveredRuleIndices.has(rIdx)) continue;
+    const ruleItem = ruleChecklist[rIdx];
+    const lowerRule = ruleItem.text.toLowerCase();
+    const rawIndex = rawText.toLowerCase().indexOf(lowerRule);
+
+    mergedItems.push({
+      text: ruleItem.text,
+      rawIndex: rawIndex !== -1 ? rawIndex : 9999 + rIdx,
+    });
+  }
+
+  // 5. Sort merged items by their position of appearance in rawText to preserve original order
+  mergedItems.sort((a, b) => a.rawIndex - b.rawIndex);
+
+  // 6. Deduplicate case-insensitively
+  const seen = new Set<string>();
+  const finalResults: ChecklistItem[] = [];
+
+  for (const item of mergedItems) {
+    const key = item.text.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    finalResults.push({
+      id: String(finalResults.length + 1),
+      text: item.text.trim(),
+      completed: false,
+    });
+  }
+
+  return finalResults.length > 0 ? finalResults : ruleChecklist;
 }
 
 /**
@@ -294,8 +479,7 @@ function parseTextRuleBased(
 
   const reminderIntent =
     hasExplicitReminderIntent(rawText) ||
-    natural.isReminder ||
-    Boolean(natural.dueDate);
+    (natural.isReminder && Boolean(natural.detectedTime));
 
   const listIntent =
     !reminderIntent && hasExplicitListIntent(rawText);
@@ -697,8 +881,7 @@ export async function POST(req: NextRequest) {
 
     const reminderIntent =
       hasExplicitReminderIntent(rawText) ||
-      natural.isReminder ||
-      Boolean(natural.dueDate);
+      (natural.isReminder && Boolean(natural.detectedTime));
 
     const explicitListIntent =
       !reminderIntent && hasExplicitListIntent(rawText);
@@ -831,7 +1014,9 @@ Examples:
 => reminder, two hours later
 
 IMPORTANT:
-Do not classify a general learning goal or a general thought as a reminder merely because it contains a timeframe.
+- An explicit reminder intention is required to classify as a reminder (such as "remind me", "don't let me forget", "set a reminder", "alert me").
+- Do NOT classify general statements describing meetings, events, agendas, or plans as reminders merely because they mention "meeting", "tomorrow", "next week", "upcoming", or future activities. If the user is simply recording information about a future event or meeting details (e.g. "Our next project meeting will focus on improving mobile responsiveness and fixing authentication issues."), classify it as a NOTE!
+- Do not classify a general learning goal or a general thought as a reminder merely because it contains a timeframe.
 
 "I want to learn Next.js this month."
 => note
@@ -841,6 +1026,7 @@ Do not classify a general learning goal or a general thought as a reminder merel
 ====================================
 
 Classify as list when the user:
+- States items, groceries, or supplies they need, want, or have to get (e.g. "I need 2 liters of milk, a dozen eggs, and 500g sugar", "We need milk, eggs and bread", "Need a bedsheet, pillow covers, curtains and a dustbin").
 - Wants to buy or purchase multiple items.
 - Mentions things to pack or bring.
 - Creates a shopping or grocery list.
@@ -852,6 +1038,12 @@ Classify as list when the user:
   office supplies list, travel essentials list or books list.
 
 Examples:
+
+"I need 2 liters of milk, a dozen eggs, and 500g sugar."
+=> list
+Title: "Grocery Shopping"
+Checklist: "2 liters of milk", "A dozen eggs", "500g sugar"
+(Notice: The user expresses needed items with quantities. This is a shopping list, NOT a note!)
 
 "Buy milk, eggs, bread and butter."
 => list
@@ -892,10 +1084,120 @@ Examples:
 "Add passport, charger and clothes to my travel essentials list."
 => list
 
+"My room is very messy. I need to buy a bedsheet, pillow covers, curtains and a dustbin."
+=> list
+Title: "Room Essentials"
+Checklist: "Bedsheet", "Pillow covers", "Curtains", "Dustbin"
+(Notice: "My room is very messy." is a state/condition/problem observation sentence. It is background context and must NEVER be added to the checklist! The items are the products: "Bedsheet", "Pillow covers", "Curtains", "Dustbin".)
+
+"I am preparing dinner for my friends. First get vegetables, then buy paneer, spices, cream and bread."
+=> list
+Title: "Grocery Shopping"
+Checklist: "Vegetables", "Paneer", "Spices", "Cream", "Bread"
+(Notice: "I am preparing dinner for my friends." is occasion/event preparation context. It must NEVER be added to the checklist! The items are the ingredients: "Vegetables", "Paneer", "Spices", "Cream", "Bread".)
+
+"On my way to the office, I need to drop my laptop for repair, collect my documents, buy coffee and pick up my parcel."
+=> list
+Title: "Daily Errands"
+Checklist: "Drop my laptop for repair", "Collect my documents", "Buy coffee", "Pick up my parcel"
+(Notice:
+- "On my way to the office" is an introductory commute/location context clause, NOT a checklist item! It must NEVER be added to the checklist!
+- For task-based checklists and errands, preserve the actionable task descriptions with their action verbs intact: "Drop my laptop for repair", "Collect my documents", "Buy coffee", "Pick up my parcel".)
+
+"Today I have to go market, then I have to buy milk, apples, soap, and bag."
+=> list
+Title: "Grocery Shopping"
+Checklist: "Milk", "Apples", "Soap", "Bag"
+(Notice: "Today I have to go market" is an introductory travel/location statement, NOT an item! It must NEVER be added to the checklist!)
+
+"I'm going to the supermarket, need to get 2 liters of milk, a dozen eggs, and 500g sugar."
+=> list
+Title: "Grocery Shopping"
+Checklist: "2 liters of milk", "A dozen eggs", "500g sugar"
+(Notice: "I'm going to the supermarket" is introductory context, excluded from the checklist.)
+
+"I have several things to do today: first buy groceries, including milk and eggs, then visit the pharmacy to get medicine, and finally pick up my parcel."
+=> list
+Title: "Errands & Shopping"
+Checklist: "Milk", "Eggs", "Medicine", "Pick up my parcel"
+(Notice:
+- "I have several things to do today:" is a meta-announcement, NOT an item.
+- "buy groceries, including" is a category frame; the actual items are "Milk" and "Eggs".
+- "visit the pharmacy to get medicine" is an errand action phrase; extract the actual target object "Medicine".
+- "finally pick up my parcel" is an actionable task; extract "Pick up my parcel".)
+
+"This weekend I am cleaning my house. I need to buy a broom, floor cleaner, detergent and garbage bags."
+=> list
+Title: "Cleaning Supplies"
+Checklist: "Broom", "Floor cleaner", "Detergent", "Garbage bags"
+(Notice: "This weekend I am cleaning my house." is a general background plan/context statement. It must NEVER be added to the checklist! The actual items are "Broom", "Floor cleaner", "Detergent", "Garbage bags".)
+
+"I went to the supermarket yesterday, but today I need to buy only soap, shampoo and toothpaste."
+=> list
+Title: "Grocery Shopping"
+Checklist: "Soap", "Shampoo", "Toothpaste"
+(Notice: "I went to the supermarket yesterday" is an unrelated past activity. Past activities and contrast clauses must NEVER be extracted as checklist items!)
+
+"Buy milk, eggs, bread"
+=> list
+Title: "Grocery Shopping"
+Checklist: "Milk", "Eggs", "Bread"
+(Notice: "Buy" is stripped, but the first item "Milk" is preserved. Never drop or skip genuine items!)
+
+"I have already ordered the cake. For the birthday party, buy balloons, candles, snacks, drinks and paper plates."
+=> list
+Title: "Party Supplies"
+Checklist: "Balloons", "Candles", "Snacks", "Drinks", "Paper plates"
+(Notice:
+- "I have already ordered the cake." is a completed activity. Completed activities (already ordered, bought, booked, finished) must NEVER be extracted as checklist items!
+- "For the birthday party" is a purpose/occasion clause, NOT an item! It must NEVER be added to the checklist!
+- The actual items to get are: "Balloons", "Candles", "Snacks", "Drinks", "Paper plates".)
+
+"My bathroom needs cleaning supplies. Get shampoo, soap, toothpaste and a toothbrush."
+=> list
+Title: "Bathroom Supplies"
+Checklist: "Shampoo", "Soap", "Toothpaste", "Toothbrush"
+(Notice: "My bathroom needs cleaning supplies." is a need/condition observation sentence and must NEVER be added to the checklist! The items are "Shampoo", "Soap", "Toothpaste", "Toothbrush".)
+
+"Buy macaroni and cheese, milk and bread."
+=> list
+Title: "Grocery Shopping"
+Checklist: "Macaroni and cheese", "Milk", "Bread"
+(Notice: "Macaroni and cheese" is a single compound product name and must NEVER be split on "and"! Other compound items like "peanut butter and jelly", "fish and chips", "bread and butter", "salt and pepper" must always be kept intact.)
+
+"I am going on vacation next week. Pack shirts, jeans, socks, shoes and a charger."
+=> list
+Title: "Packing List"
+Checklist: "Shirts", "Jeans", "Socks", "Shoes", "A charger"
+(Notice: "I am going on vacation next week." is background travel context and must never be added as a checklist item! The items are "Shirts", "Jeans", "Socks", "Shoes", "A charger".)
+
+"Yesterday I bought rice and sugar. Today I only need oil, flour, salt and tea."
+=> list
+Title: "Grocery Shopping"
+Checklist: "Oil", "Flour", "Salt", "Tea"
+(Notice: "Yesterday I bought rice and sugar." describes completed past activities. NEVER include previously purchased items! The items to get today are "Oil", "Flour", "Salt", "Tea".)
+
+"Add 2 bottles of shampoo, 3 packets of biscuits and 1 kg of rice."
+=> list
+Title: "Grocery Shopping"
+Checklist: "2 bottles of shampoo", "3 packets of biscuits", "1 kg of rice"
+(Notice: Quantities, units, and complete item descriptions must ALWAYS be preserved intact!)
+
 For lists:
-- Generate a short meaningful title.
-- Put every individual item in checklist.
+- Generate a short, meaningful title matching the theme (e.g. "Bathroom Supplies" for bathroom items; "Packing List" for travel/vacation; "School Supplies" for school; "Cleaning Supplies" for house cleaning; "Grocery Shopping" for market and food groceries; "Room Essentials" for bedroom/home items; "Daily Errands" for to-dos on the go; "Shopping List" for general items).
+- Understand the complete sentence structure before extracting items.
+- NEVER split compound item names containing "and" or "&" (e.g. "Macaroni and cheese", "peanut butter and jelly", "bread and butter", "fish and chips", "salt and pepper").
+- NEVER add introductory sentences, general context, travel statements, destinations, state/condition/need sentences (e.g. "My room is very messy", "My bathroom needs cleaning supplies", "The fridge is empty"), event/meal preparations (e.g. "I am preparing dinner for my friends"), travel plans (e.g. "I am going on vacation next week"), commute clauses (e.g. "On my way to the office"), or past activities (e.g. "Yesterday I bought rice and sugar") to the checklist.
+- Support BOTH shopping lists and task-based checklists:
+  * For shopping lists (buying products, groceries, supplies): extract clean product/commodity names without conversational preambles (e.g. "I need to buy a bedsheet, pillow covers, curtains and a dustbin" => "Bedsheet", "Pillow covers", "Curtains", "Dustbin"; "First get vegetables, then buy paneer, spices, cream and bread" => "Vegetables", "Paneer", "Spices", "Cream", "Bread").
+  * For task-based checklists and errands (actions, errands, to-dos to perform): preserve actionable task descriptions with their action verbs intact (e.g. "On my way to the office, I need to drop my laptop for repair, collect my documents, buy coffee and pick up my parcel" => "Drop my laptop for repair", "Collect my documents", "Buy coffee", "Pick up my parcel"; "Wash clothes, clean the kitchen and vacuum the room" => "Wash clothes", "Clean the kitchen", "Vacuum the room").
+- Put only genuine, individual items or actionable tasks in the checklist.
 - Each checklist item must be separate.
+- STRIP conversational preambles and sequence words (e.g. "first", "finally", "including", "such as", "I have to buy", "I need to", "I must", "then I have buy").
+- If user uses transitional phrases like "then I have to buy pants" or "after that buy soap", split them into separate clean items ("Pants", "Soap").
+- Preserve valid quantities and units (e.g. "2 bottles of shampoo", "3 packets of biscuits", "1 kg of rice", "2 liters of milk", "A dozen eggs", "500g sugar", "A charger").
+- Do NOT combine background context with the first item.
+- Do NOT blindly remove the first item. If the first phrase contains a genuine item (e.g. "Buy milk, eggs and bread" or "Milk, apples and soap"), PRESERVE the first item ("Milk").
 - Do not put all checklist items into a single string.
 - Do not create reminders for individual checklist items.
 - Keep the content short and descriptive.
@@ -911,12 +1213,18 @@ Classify as note for:
 - Ideas.
 - Opinions.
 - Journal entries.
-- Informational statements.
+- Informational statements and meeting details / agendas (e.g. what a meeting will focus on or discuss).
 - Learning goals.
 - Personal goals.
 - General descriptions.
 
 Examples:
+
+"Our next project meeting will focus on improving mobile responsiveness and fixing authentication issues."
+=> note
+Title: "Project Meeting Focus"
+Content: "Our next project meeting will focus on improving mobile responsiveness and fixing authentication issues."
+(Notice: This is informational meeting detail/agenda recording. The user is recording what the meeting will focus on, NOT asking to be reminded! There is no "remind me" instruction. Therefore, it is a NOTE, NOT a reminder!)
 
 "Today I learned something interesting about JavaScript closures."
 => note
@@ -949,9 +1257,10 @@ Examples:
 => note
 
 IMPORTANT:
-- Commas and "and" do not automatically indicate a list.
-- A learning goal is a note.
-- An idea is a note.
+- A statement listing needed groceries, products, supplies, or tasks (e.g. "I need 2 liters of milk, a dozen eggs, and 500g sugar", "Need bread and butter") is a LIST, NOT a note.
+- Commas and "and" in a general thought or idea do not make it a list (e.g. "React hooks help us manage state and side effects" is a note).
+- A learning goal is a note ("I want to learn Next.js, TypeScript and PostgreSQL").
+- An idea is a note ("My idea is to build a personal finance application").
 - A collection of actionable activities can be a list.
 - When uncertain between a note and list, choose note.
 - Explicit reminder intent takes priority over list intent.
@@ -1296,7 +1605,7 @@ For a single item, items must contain exactly one item.
             }
 
             // Rule-based multiple-reminder fallback.
-            if (formattedItems.length <= 1) {
+            if (reminderIntent && formattedItems.length <= 1) {
               const ruleItems = formatRuleBasedReminders(
                 rawText,
                 refDate,
@@ -1330,7 +1639,7 @@ For a single item, items must contain exactly one item.
           if (formattedItems.length <= 1) {
             let finalType: ItemType;
 
-            if (reminderIntent) {
+            if (hasExplicitReminderIntent(rawText)) {
               finalType = "reminder";
             } else if (
               explicitListIntent ||
@@ -1338,6 +1647,12 @@ For a single item, items must contain exactly one item.
             ) {
               // Use explicit detection and AI classification.
               finalType = "list";
+            } else if (parsed.type === "note") {
+              finalType = "note";
+            } else if (parsed.type === "reminder") {
+              finalType = "reminder";
+            } else if (natural.isReminder && Boolean(natural.detectedTime)) {
+              finalType = "reminder";
             } else {
               finalType = "note";
             }
@@ -1485,8 +1800,9 @@ For a single item, items must contain exactly one item.
 
               if (extractedList) {
                 finalTitle = extractedList.title;
-                finalContent =
-                  `Items to add to your ${extractedList.title} list.`;
+                finalContent = extractedList.title.toLowerCase().endsWith("list")
+                  ? `Items to add to your ${extractedList.title}.`
+                  : `Items to add to your ${extractedList.title} list.`;
 
                 finalChecklist = extractedList.items;
               } else {
@@ -1509,12 +1825,12 @@ For a single item, items must contain exactly one item.
                   listInfo.checklist
                 );
 
-                // Prefer the AI's individually extracted items.
-                // Use rule-based extraction when AI returns none.
-                finalChecklist =
-                  aiChecklist.length > 0
-                    ? aiChecklist
-                    : generatedChecklist;
+                // Reconcile AI extraction with rule-based extraction
+                finalChecklist = reconcileChecklists(
+                  aiChecklist,
+                  generatedChecklist,
+                  rawText
+                );
               }
 
               if (!finalChecklist || finalChecklist.length === 0) {

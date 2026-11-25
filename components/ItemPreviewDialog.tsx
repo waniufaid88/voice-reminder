@@ -17,6 +17,7 @@ import {
   formatAudioDuration,
 } from "@/lib/date-utils";
 import { parseNaturalReminder, cleanReminderTitle } from "@/lib/natural-date-parser";
+import { cleanChecklistItem } from "@/lib/checklist-cleaner";
 import { itemSchema, ItemFormValues } from "@/lib/validations/item";
 
 import {
@@ -230,6 +231,11 @@ export function ItemPreviewDialog({
           ? ["#voice"]
           : [];
 
+    const initialChecklist = (itemData.checklist || []).map((c) => ({
+      ...c,
+      text: cleanChecklistItem(c.text) || c.text,
+    }));
+
     reset({
       type: itemType,
       title: itemData.title || "",
@@ -239,7 +245,7 @@ export function ItemPreviewDialog({
       recurrenceMode: calculatedMode,
       recurrenceDays:
         calculatedDays || [new Date().getDay()],
-      checklist: itemData.checklist || [],
+      checklist: initialChecklist,
       tags: initialTags,
     });
     // Rule: Notes and lists must remain personal
@@ -381,6 +387,7 @@ export function ItemPreviewDialog({
 
   const handleAddChecklistItem = () => {
     if (!newChecklistText.trim()) return;
+    const cleaned = cleanChecklistItem(newChecklistText.trim()) || newChecklistText.trim();
 
     setValue(
       "checklist",
@@ -388,7 +395,7 @@ export function ItemPreviewDialog({
         ...currentChecklist,
         {
           id: Date.now().toString(),
-          text: newChecklistText.trim(),
+          text: cleaned,
           completed: false,
         },
       ],

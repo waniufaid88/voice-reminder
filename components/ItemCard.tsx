@@ -26,6 +26,7 @@ import { AudioPlayer } from "./AudioPlayer";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { CompleteReminderDialog } from "./CompleteReminderDialog";
+import { cleanChecklistItem } from "@/lib/checklist-cleaner";
 import {
   formatReadableDueDate,
   formatAudioDuration,
@@ -381,11 +382,12 @@ export function ItemCard({
     }
 
     const currentChecklist = item.checklist || [];
+    const cleaned = cleanChecklistItem(newItemText.trim()) || newItemText.trim();
     const newEntry = {
       id: typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
         : Math.random().toString(36).substring(2, 9),
-      text: newItemText.trim(),
+      text: cleaned,
       completed: false,
     };
 
