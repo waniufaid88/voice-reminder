@@ -27,14 +27,16 @@ export function isNonItemSentence(text: string): boolean {
   if (!text) return true;
   const lower = text.trim().toLowerCase();
 
-  // 1. Completed / Past activities:
-  // e.g. "I have already ordered the cake", "Already bought milk", "I went to the supermarket yesterday", "We already booked tickets"
+  // 1. Completed / Past activities / Existing inventory:
+  // e.g. "I already have rice and sugar", "I have already ordered the cake", "Already bought milk", "I went to the supermarket yesterday", "We already booked tickets"
   const alreadyPattern = /\b(?:already|previously)\b/i;
   const completedVerbs =
-    /\b(?:ordered|bought|purchased|got|booked|called|arranged|prepared|cleaned|finished|completed|sent|paid|made|done|picked\s+up|baked|taken|went|visited|had|was|were|shopped)\b/i;
+    /\b(?:ordered|bought|purchased|got|booked|called|arranged|prepared|cleaned|finished|completed|sent|paid|made|done|picked\s+up|baked|taken|went|visited|had|was|were|shopped|have|has|own|possess)\b/i;
   if (
     alreadyPattern.test(lower) &&
-    (completedVerbs.test(lower) || /\b(?:have|has|had|'ve|'d)\s+already\b/i.test(lower))
+    (completedVerbs.test(lower) ||
+      /\b(?:have|has|had|'ve|'d)\s+already\b/i.test(lower) ||
+      /\balready\s+(?:have|has|had|got|own|possess)\b/i.test(lower))
   ) {
     return true;
   }
@@ -58,6 +60,14 @@ export function isNonItemSentence(text: string): boolean {
   const conditionStatePattern =
     /^(?:(?:my|the|our)?\s*(?:room|bedroom|house|kitchen|bathroom|garage|office|fridge|refrigerator|pantry|car|closet|wardrobe|place|apartment)\s+(?:needs|requires)\s+(?:cleaning\s+|some\s+|new\s+)?(?:supplies|items|repairs|things|groceries|cleaning)|(?:my|the|our)?\s*(?:room|bedroom|house|kitchen|bathroom|garage|office|fridge|refrigerator|pantry|car|closet|wardrobe|place|apartment)\s+(?:is|are|looks|seems|became|got)\s+(?:very\s+|really\s+|so\s+|extremely\s+|quite\s+|completely\s+|totally\s+)?(?:messy|dirty|empty|cluttered|disorganized|unorganized|dusty|broken|full|unclean)|there\s+(?:is|are)\s+no\s+[\w\s]+|we\s+are\s+(?:out\s+of|running\s+out\s+of)\s+[\w\s]+|we\s+don't\s+have\s+(?:any|enough)\s+[\w\s]+)\.?$/i;
   if (conditionStatePattern.test(lower)) {
+    return true;
+  }
+
+  // 3b. General chore / cleaning / project / maintenance goal statements:
+  // e.g. "I need to clean my house", "I have to clean my room", "We need to clean the apartment", "I want to organize my closet"
+  const choreGoalPattern =
+    /^(?:(?:today|tomorrow|this\s+(?:weekend|week))?\s*)?(?:i|we)\s+(?:need\s+to|have\s+to|want\s+to|must|gotta|plan\s+to|am\s+going\s+to|'re\s+going\s+to)\s+(?:clean(?:\s+up)?|tidy(?:\s+up)?|organize|renovate|remodel|paint|wash|fix|repair|deep\s+clean)\s+(?:my|the|our)\s+(?:house|home|room|bedroom|bathroom|kitchen|apartment|garage|closet|place|yard|garden|car)\.?$/i;
+  if (choreGoalPattern.test(lower)) {
     return true;
   }
 
@@ -164,6 +174,13 @@ export function cleanChecklistItem(rawText: string): string {
       ""
     )
     .trim();
+
+  // Remove container / bag packing frames before checking actionable task:
+  // e.g. "Prepare my gym bag with a towel" -> "a towel"
+  text = text.replace(
+    /^(?:please\s+)?(?:prepare|pack|fill|load|stock|organize|set\s+up)\s+(?:(?:my|the|a|an)\s+)?(?:[\w\s]+?\s+)?(?:bag|backpack|gym\s+bag|suitcase|luggage|box|lunchbox|kit|desk|basket|cart|car)\s+with\s+/i,
+    ""
+  );
 
   // If this item is recognized as an actionable task, preserve its action verb and phrasing!
   // e.g. "drop my laptop for repair", "collect my documents", "buy coffee", "pick up my parcel", "water the plants"
@@ -342,6 +359,18 @@ export function splitChecklistItems(rawText: string): string[] {
       /^\s*for\s+(?:the\s+|my\s+|our\s+)?(?:[\w\s]+?\s+)?(?:party|event|dinner|lunch|breakfast|meal|trip|vacation|picnic|celebration|wedding|birthday|meeting|conference|gathering|office|school|home|room)\s*[,.;:]\s*/i;
     sentence = sentence.replace(purposeClausePattern, "");
 
+    // Strip container / bag / kit packing instructions:
+    // e.g. "Prepare my gym bag with a towel..." -> "a towel..."
+    const containerPackPattern =
+      /^(?:please\s+)?(?:prepare|pack|fill|load|stock|organize|set\s+up)\s+(?:(?:my|the|a|an)\s+)?(?:[\w\s]+?\s+)?(?:bag|backpack|gym\s+bag|suitcase|luggage|box|lunchbox|kit|desk|basket|cart|car)\s+with\s+/i;
+    sentence = sentence.replace(containerPackPattern, "");
+
+    // Strip leading existing inventory / already-have clauses at beginning of sentence:
+    // e.g. "I already have rice and sugar, but today I need..." -> "today I need..."
+    const existingInventoryPattern =
+      /^[A-Za-z\s']*\b(?:already|previously)\s+(?:have|has|had|got|bought|ordered|purchased|own)\b[^.,;:]*[,.;:]\s*(?:but\s+|however\s+|so\s+|and\s+)?/i;
+    sentence = sentence.replace(existingInventoryPattern, "");
+
     // Strip past activities with comma/contrast conjunctions at the beginning:
     // e.g. "I went to the supermarket yesterday, but today I need to buy..."
     const pastConjunctionPattern =
@@ -402,6 +431,7 @@ export function splitChecklistItems(rawText: string): string[] {
       if (!part || isNonItemSentence(part)) {
         continue;
       }
+      part = part.replace(containerPackPattern, "");
       const cleaned = cleanChecklistItem(part);
       if (
         cleaned &&

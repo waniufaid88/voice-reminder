@@ -477,30 +477,25 @@ function parseTextRuleBased(
     clientTimezoneOffset
   );
 
+  const teamMatch =
+    userTeams.length > 0
+      ? matchTeamDestination(rawText, userTeams)
+      : { teamId: null, teamName: null, isAmbiguous: false, ambiguousTeams: [] };
+
   const reminderIntent =
     hasExplicitReminderIntent(rawText) ||
-    (natural.isReminder && Boolean(natural.detectedTime));
+    (natural.isReminder && (Boolean(natural.detectedTime) || Boolean(natural.dueDate))) ||
+    (teamMatch.teamId !== null && natural.isReminder);
 
   const listIntent =
     !reminderIntent && hasExplicitListIntent(rawText);
 
   // Reminder priority.
   if (reminderIntent) {
-    let teamId: string | null = null;
-    let teamName: string | null = null;
-    let isTeamAmbiguous = false;
-    let ambiguousTeams: TeamInfo[] = [];
-
-    if (userTeams.length > 0) {
-      const match = matchTeamDestination(rawText, userTeams);
-      if (match.teamId) {
-        teamId = match.teamId;
-        teamName = match.teamName;
-      } else if (match.isAmbiguous) {
-        isTeamAmbiguous = true;
-        ambiguousTeams = match.ambiguousTeams;
-      }
-    }
+    let teamId: string | null = teamMatch.teamId;
+    let teamName: string | null = teamMatch.teamName;
+    let isTeamAmbiguous = teamMatch.isAmbiguous;
+    let ambiguousTeams: TeamInfo[] = teamMatch.ambiguousTeams;
 
     const multiple = formatRuleBasedReminders(
       rawText,
@@ -675,7 +670,7 @@ export async function POST(req: NextRequest) {
           if (Array.isArray(parsed)) {
             userTeams = parsed;
           }
-        } catch {}
+        } catch { }
       }
 
       const offsetRaw = formData.get("clientTimezoneOffset");
@@ -810,7 +805,7 @@ export async function POST(req: NextRequest) {
       } else if (typeof json.teams === "string") {
         try {
           userTeams = JSON.parse(json.teams);
-        } catch {}
+        } catch { }
       }
 
       if (
@@ -879,9 +874,15 @@ export async function POST(req: NextRequest) {
       clientTimezoneOffset
     );
 
+    const teamMatch =
+      userTeams.length > 0
+        ? matchTeamDestination(rawText, userTeams)
+        : { teamId: null, teamName: null, isAmbiguous: false, ambiguousTeams: [] };
+
     const reminderIntent =
       hasExplicitReminderIntent(rawText) ||
-      (natural.isReminder && Boolean(natural.detectedTime));
+      (natural.isReminder && (Boolean(natural.detectedTime) || Boolean(natural.dueDate))) ||
+      (teamMatch.teamId !== null && natural.isReminder);
 
     const explicitListIntent =
       !reminderIntent && hasExplicitListIntent(rawText);
@@ -975,13 +976,41 @@ ${tomorrowDayName}, ${tomorrowDateStr}
 ====================================
 
 Classify as reminder when:
-- The user explicitly says "remind me".
-- The user asks not to forget something.
+- The user explicitly says "remind me", "set a reminder", "alert me", or "don't let me forget".
+- The user expresses an actionable task, future commitment, or obligation paired with a date or time, even without saying "remind me" (e.g. "I will call my friend at 11am", "I have to call my friend at 10 am", "Call my friend tomorrow at 5pm", "I have to submit my assignment tomorrow", "Meet my friend on 5th December at 3pm", "Pay the electricity bill on 1st January", "In Test Reminder, call my friend at 10am").
 - The user specifies an appointment, meeting, task or activity with a date or time.
 - The user specifies a relative time such as after 30 minutes or in two hours.
 - The user specifies a recurrence such as every day.
 
 Examples:
+
+"I will call my friend at 11am."
+=> reminder, 11:00
+Title: "Call My Friend"
+
+"I have to call my friend at 10 am."
+=> reminder, 10:00
+Title: "Call My Friend"
+
+"Call my friend tomorrow at 5pm."
+=> reminder, tomorrow 17:00
+Title: "Call My Friend"
+
+"I have to submit my assignment tomorrow."
+=> reminder, tomorrow 09:00
+Title: "Submit My Assignment"
+
+"Meet my friend on 5th December at 3pm."
+=> reminder, 5th December 15:00
+Title: "Meet My Friend"
+
+"Pay the electricity bill on 1st January."
+=> reminder, 1st January 09:00
+Title: "Pay The Electricity Bill"
+
+"In Test Reminder, call my friend at 10am."
+=> reminder, 10:00, team: Test Reminder
+Title: "Call My Friend"
 
 "Remind me to attend a meeting tomorrow at 10 AM."
 => reminder, tomorrow 10:00
@@ -1014,9 +1043,10 @@ Examples:
 => reminder, two hours later
 
 IMPORTANT:
-- An explicit reminder intention is required to classify as a reminder (such as "remind me", "don't let me forget", "set a reminder", "alert me").
+- A future actionable task, commitment, or obligation with a date or time is a REMINDER.
+- If a date is specified without an explicit time (e.g. "Pay the electricity bill on 1st January", "I have to submit my assignment tomorrow"), classify it as a REMINDER and default the time to 09:00.
 - Do NOT classify general statements describing meetings, events, agendas, or plans as reminders merely because they mention "meeting", "tomorrow", "next week", "upcoming", or future activities. If the user is simply recording information about a future event or meeting details (e.g. "Our next project meeting will focus on improving mobile responsiveness and fixing authentication issues."), classify it as a NOTE!
-- Do not classify a general learning goal or a general thought as a reminder merely because it contains a timeframe.
+- Do not classify a general learning goal or a general thought as a reminder merely because it contains a timeframe:
 
 "I want to learn Next.js this month."
 => note
@@ -1183,6 +1213,24 @@ Title: "Grocery Shopping"
 Checklist: "2 bottles of shampoo", "3 packets of biscuits", "1 kg of rice"
 (Notice: Quantities, units, and complete item descriptions must ALWAYS be preserved intact!)
 
+"I already have rice and sugar. Today I need oil, flour, salt and tea."
+=> list
+Title: "Grocery Shopping"
+Checklist: "Oil", "Flour", "Salt", "Tea"
+(Notice: "I already have rice and sugar." describes existing items already on hand. Existing/already possessed items must NEVER be extracted into the checklist! The items needed today are: "Oil", "Flour", "Salt", "Tea".)
+
+"Prepare my gym bag with a towel, water bottle, sports shoes and headphones."
+=> list
+Title: "Gym Essentials"
+Checklist: "Towel", "Water bottle", "Sports shoes", "Headphones"
+(Notice: "Prepare my gym bag with" is a container packing instruction. Extract the items to put inside: "Towel", "Water bottle", "Sports shoes", "Headphones".)
+
+"I need to clean my house. Get a broom, mop, floor cleaner, detergent and gloves."
+=> list
+Title: "Cleaning Supplies"
+Checklist: "Broom", "Mop", "Floor cleaner", "Detergent", "Gloves"
+(Notice: "I need to clean my house." is a general chore/goal statement and must NEVER be added to the checklist! The items to get are: "Broom", "Mop", "Floor cleaner", "Detergent", "Gloves".)
+
 For lists:
 - Generate a short, meaningful title matching the theme (e.g. "Bathroom Supplies" for bathroom items; "Packing List" for travel/vacation; "School Supplies" for school; "Cleaning Supplies" for house cleaning; "Grocery Shopping" for market and food groceries; "Room Essentials" for bedroom/home items; "Daily Errands" for to-dos on the go; "Shopping List" for general items).
 - Understand the complete sentence structure before extracting items.
@@ -1271,11 +1319,24 @@ IMPORTANT:
 
 If the user describes multiple distinct reminder tasks, return every task in items.
 
-Example:
+Examples:
+
+"Call my friend at 11am, then go shopping at 2pm."
+=> Return two separate reminders in items:
+1. Title: "Call My Friend", 11:00
+2. Title: "Go Shopping", 14:00
+
+"Remind me to buy groceries tomorrow, pay the bill on Friday and visit the doctor on 5th December."
+=> Return three separate reminders in items:
+1. Title: "Buy Groceries", tomorrow 09:00
+2. Title: "Pay The Bill", upcoming Friday 09:00
+3. Title: "Visit The Doctor", 5th December 09:00
 
 "Call my friend at 11 AM then go to the market at 1 PM and walk at 7 PM."
-
-Return three separate reminders.
+=> Return three separate reminders in items:
+1. Title: "Call My Friend", 11:00
+2. Title: "Go To The Market", 13:00
+3. Title: "Walk", 19:00
 
 Do not split:
 - Notes into reminders.
@@ -1351,9 +1412,8 @@ Lists:
 8. TEAM DESTINATION FOR REMINDERS
 ====================================
 
-${
-  userTeams.length > 0
-    ? `The user belongs to the following available teams:
+${userTeams.length > 0
+            ? `The user belongs to the following available teams:
 ${JSON.stringify(userTeams.map((t) => ({ id: t.id, name: t.name })))}
 
 Rules for Team Selection:
@@ -1375,8 +1435,8 @@ Rules for Team Selection:
    Set "teamId": null, "teamName": null, "isTeamAmbiguous": false, "ambiguousTeamIds": [].
    This creates a personal reminder as usual.
 4. Team names can be anything (e.g., "Friends", "Family", "Office", "ABC", etc.). They do NOT need to contain "Team" or "Group".`
-    : `The user currently has no teams. Always set "teamId": null, "teamName": null, "isTeamAmbiguous": false, "ambiguousTeamIds": [].`
-}
+            : `The user currently has no teams. Always set "teamId": null, "teamName": null, "isTeamAmbiguous": false, "ambiguousTeamIds": [].`
+          }
 
 ====================================
 9. OUTPUT
@@ -1639,20 +1699,23 @@ For a single item, items must contain exactly one item.
           if (formattedItems.length <= 1) {
             let finalType: ItemType;
 
-            if (hasExplicitReminderIntent(rawText)) {
-              finalType = "reminder";
-            } else if (
+            const hasReliableReminder =
+              hasExplicitReminderIntent(rawText) ||
+              (natural.isReminder && (Boolean(natural.detectedTime) || Boolean(natural.dueDate))) ||
+              (teamMatch.teamId !== null && natural.isReminder);
+
+            const isExplicitList =
               explicitListIntent ||
-              parsed.type === "list"
-            ) {
-              // Use explicit detection and AI classification.
+              (parsed.type === "list" && !hasReliableReminder);
+
+            if (hasReliableReminder && !isExplicitList) {
+              finalType = "reminder";
+            } else if (isExplicitList) {
               finalType = "list";
-            } else if (parsed.type === "note") {
-              finalType = "note";
             } else if (parsed.type === "reminder") {
               finalType = "reminder";
-            } else if (natural.isReminder && Boolean(natural.detectedTime)) {
-              finalType = "reminder";
+            } else if (parsed.type === "note") {
+              finalType = "note";
             } else {
               finalType = "note";
             }
@@ -1779,6 +1842,8 @@ For a single item, items must contain exactly one item.
               ) {
                 finalTitle =
                   natural.title || cleanReminderTitle(rawText);
+              } else {
+                finalTitle = cleanReminderTitle(finalTitle);
               }
 
               if (!finalContent) {
@@ -1966,17 +2031,6 @@ For a single item, items must contain exactly one item.
       clientTimezoneOffset,
       userTeams
     );
-
-    return NextResponse.json({
-      success: true,
-      usedGroq: false,
-      usedGroqTranscription,
-      usedGroqStructuring: false,
-      usedOpenAI: false,
-      isQuotaExhausted: false,
-      rawTranscript: rawText,
-      ...structured,
-    });
 
     return NextResponse.json({
       success: true,

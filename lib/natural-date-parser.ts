@@ -117,18 +117,50 @@ export function parseNaturalReminder(
     /\b(?:alert|notify|ping|wake)\s+me\b/i.test(normalizedText) ||
     /\b(schedule|set)\s+(?:a\s+)?(?:reminder|alarm)\b/i.test(normalizedText);
 
-  // Specific times: 5 PM, 4:30 AM, at 10, in 2 hours
+  // Strip leading team/group prefixes like "in Team X,", "for Team X,", "Team X:"
+  const textWithoutTeam = normalizedText
+    .replace(/^(?:(?:in|for|to|at)\s+(?:the\s+)?(?:team\s+)?[\w\s-]{1,30}\s*[,:]\s*(?!\d{2})|[a-zA-Z][\w\s-]{0,29}\s*:\s*(?!\d{2}))/i, "")
+    .trim();
+
+  // Specific times: 5 PM, 4:30 AM, at 10, in 2 hours, after 30 mins, 17:00, noon, midnight
   const hasTimePattern =
     /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.test(normalizedText) ||
     /\bat\s+\d{1,2}(?::\d{2})?\b/i.test(normalizedText) ||
-    /\bin\s+\d+\s*(?:minutes?|mins?|hours?|hrs?|days?)\b/i.test(normalizedText);
+    /\b(?:in|after)\s+\d+\s*(?:minutes?|mins?|hours?|hrs?|days?)\b/i.test(normalizedText) ||
+    /\b(?:noon|midday|midnight)\b/i.test(normalizedText) ||
+    /\b(?:at\s+)?([01]?\d|2[0-3])[:.][0-5]\d\b/i.test(normalizedText);
 
-  // Imperative action verbs: e.g. "call doctor at 5 PM", "pay bill tomorrow at 10 AM", "submit report on monday at 11 AM"
+  // Explicit future dates: today, tomorrow, monday, 5th december, 1st january
+  const hasDatePattern =
+    /\b(?:today|tomorrow|tmrw|tonight|day\s+after\s+tomorrow)\b/i.test(normalizedText) ||
+    /\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(normalizedText) ||
+    /\b(?:on\s+)?(?:\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)|(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2}(?:st|nd|rd|th)?)\b/i.test(normalizedText);
+
+  // Actionable commitment verbs: "call", "pay", "submit", "attend", "meet", "send", "go shopping", etc.
+  const hasActionVerb =
+    /\b(?:call|phone|ring|pay|submit|attend|meet|send|email|buy|pick\s+up|clean|wash|take|drink|check|finish|complete|wake(?:\s+up)?|visit|drop|collect|deliver|post|write|order|renew|cancel|book|schedule|remind|go(?:\s+to|\s+for|\s+shopping|\s+out)?|head(?:\s+to)?|walk|run|exercise|workout|gym|study|read|cook|eat|sleep|start|leave|get|shop)\b/i.test(
+      textWithoutTeam
+    );
+
   const isImperativeAction =
-    /^(?:please\s+)?(?:call|pay|submit|attend|meet|send|email|buy|pick\s+up|clean|wash|take|drink|check|finish|complete)\b/i.test(normalizedText);
+    /^(?:please\s+)?(?:call|phone|ring|pay|submit|attend|meet|send|email|buy|pick\s+up|clean|wash|take|drink|check|finish|complete|wake(?:\s+up)?|visit|drop|collect|deliver|post|write|order|renew|cancel|book|schedule|go(?:\s+to|\s+for|\s+shopping|\s+out)?|head(?:\s+to)?|walk|run|exercise|workout|gym|study|read|cook|eat|sleep|start|leave|get|shop)\b/i.test(
+      textWithoutTeam
+    ) ||
+    /^(?:(?:today|tomorrow)\s+)?(?:i|we)\s+(?:will|shall|have\s+to|need\s+to|must|should|gotta|got\s+to|am\s+going\s+to|'ll)\s+(?:call|phone|ring|pay|submit|attend|meet|send|email|buy|pick\s+up|clean|wash|take|drink|check|finish|complete|wake(?:\s+up)?|visit|drop|collect|deliver|post|write|order|renew|cancel|book|schedule|go(?:\s+to|\s+for|\s+shopping|\s+out)?|head(?:\s+to)?|walk|run|exercise|workout|gym|study|read|cook|eat|sleep|start|leave|get|shop)\b/i.test(
+      textWithoutTeam
+    ) ||
+    hasActionVerb;
+
+  // Distinguish from learning thoughts, personal goals or meeting agendas:
+  const isGeneralNoteOrIdea =
+    /\b(?:want|plan|hope)\s+to\s+learn\b/i.test(lower) ||
+    /\b(?:learning\s+goal|my\s+idea\s+is|thought\s+about|learned\s+that|learned\s+about)\b/i.test(lower) ||
+    /\b(?:meeting|discussion)\s+(?:will\s+focus\s+on|focused\s+on|discussed|agenda\s+is)\b/i.test(lower);
 
   const isReminder =
-    explicitReminderPattern || (hasTimePattern && isImperativeAction);
+    !isGeneralNoteOrIdea &&
+    (explicitReminderPattern ||
+      ((hasTimePattern || hasDatePattern) && (hasActionVerb || isImperativeAction)));
 
   // 2. Detect Recurrence
   let recurrenceMode: "once" | "daily" | "custom" = "once";
@@ -176,9 +208,9 @@ export function parseNaturalReminder(
   let extractedHours: number | null = null;
   let extractedMinutes: number | null = null;
 
-  // Case 3a: Relative time (e.g. "in 15 minutes", "in 2 hours", "in 3 days")
+  // Case 3a: Relative time (e.g. "in 15 minutes", "in 2 hours", "in 3 days", "after 2 hours")
   const relativeMatch = lower.match(
-    /\bin\s+(\d+)\s*(minute|min|minutes|mins|hour|hr|hours|hrs|day|days)\b/i
+    /\b(?:in|after)\s+(\d+)\s*(minute|min|minutes|mins|hour|hr|hours|hrs|day|days)\b/i
   );
 
   if (relativeMatch) {
@@ -255,10 +287,10 @@ export function parseNaturalReminder(
     }
   }
 
-  // Case 3d: "at HH:MM" format (e.g. "at 16:30", "at 09:15", "at 3:00")
+  // Case 3d: "HH:MM" or "at HH:MM" 24h format (e.g. "17:00", "10:00", "at 16:30", "at 3:00")
   if (extractedHours === null) {
     const time24h = lower.match(
-      /\bat\s+(\d{1,2})[:.](\d{2})(?!\s*(?:am|pm|a\.m|p\.m))\b/i
+      /\b(?:at\s+)?([01]?\d|2[0-3])[:.]([0-5]\d)(?!\s*(?:am|pm|a\.m|p\.m))\b/i
     );
 
     if (time24h) {
@@ -406,29 +438,30 @@ export function parseNaturalReminder(
       }
     }
 
-    // Check for specific date (e.g. "15th nov", "november 20", "nov 12")
+    // Check for specific date (e.g. "15th nov", "november 20", "nov 12", "5th of december", "26 november 2026")
     if (!dayExplicitlyFound) {
       for (const [monthName, monthIndex] of Object.entries(MONTH_MAP)) {
         const dateMatch =
           lower.match(
             new RegExp(
-              `\\b(?:on\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthName}\\b`,
+              `\\b(?:on\\s+)?(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+of)?\\s+${monthName}(?:\\s+(\\d{4}))?\\b`,
               "i"
             )
           ) ||
           lower.match(
             new RegExp(
-              `\\b(?:on\\s+)?${monthName}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`,
+              `\\b(?:on\\s+)?${monthName}\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+(\\d{4}))?\\b`,
               "i"
             )
           );
 
         if (dateMatch) {
           const dayNum = parseInt(dateMatch[1], 10);
+          const explicitYear = dateMatch[2] ? parseInt(dateMatch[2], 10) : undefined;
 
           targetMonth = monthIndex;
           targetDay = dayNum;
-          targetYear = userYear;
+          targetYear = explicitYear !== undefined ? explicitYear : userYear;
 
           const candidateUtc =
             Date.UTC(
@@ -440,7 +473,7 @@ export function parseNaturalReminder(
             ) +
             offset * 60 * 1000;
 
-          if (candidateUtc < referenceDate.getTime() - 24 * 60 * 60 * 1000) {
+          if (!explicitYear && candidateUtc < referenceDate.getTime() - 24 * 60 * 60 * 1000) {
             targetYear += 1;
           }
 
@@ -547,10 +580,15 @@ export function parseNaturalReminder(
 export function cleanReminderTitle(rawText: string): string {
   let cleaned = rawText.trim();
 
+  // Strip trailing punctuation
+  cleaned = cleaned.replace(/[.?!]+$/, "").trim();
+
   // Strip prefixes
   cleaned = cleaned
     .replace(/\bp\.m\.?/gi, "pm")
     .replace(/\ba\.m\.?/gi, "am")
+    .replace(/^(?:(?:in|for|to|at)\s+(?:the\s+)?(?:team\s+)?[\w\s-]{1,30}\s*[,:]\s*(?!\d{2})|[a-zA-Z][\w\s-]{0,29}\s*:\s*(?!\d{2}))/i, "")
+    .replace(/^(?:(?:today|tomorrow)\s+)?(?:i|we)\s+(?:will|shall|have\s+to|need\s+to|must|should|gotta|got\s+to|am\s+going\s+to|'ll)\s+/i, "")
     .replace(/^(?:tomorrow\s+|today\s+|tonight\s+)?(?:i\s+have\s+(?:an?\s+)?|i\s+got\s+(?:an?\s+)?)/i, "")
     .replace(/^(?:i\s+have\s+to|i\s+need\s+to|i\s+must|i\s+should)\s+/i, "")
     .replace(/^(?:please\s+)?remind\s+me\s+(?:to\s+|about\s+|that\s+)?/i, "")
@@ -565,10 +603,13 @@ export function cleanReminderTitle(rawText: string): string {
   cleaned = cleaned
     .replace(/\s+(?:tomorrow|today|tonight)(?:\s+at\s+.*)?$/i, "")
     .replace(/\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.?|p\.m\.?).*$/i, "")
+    .replace(/\s+at\s+\d{1,2}:\d{2}.*$/i, "")
     .replace(/\s+(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+.*)?$/i, "")
-    .replace(/\s+in\s+\d+\s*(?:minute|min|hour|hr|day)s?.*$/i, "")
+    .replace(/\s+(?:on\s+)?(?:\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)|(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2}(?:st|nd|rd|th)?)(?:\s+\d{4})?(?:\s+at\s+.*)?$/i, "")
+    .replace(/\s+(?:in|after)\s+\d+\s*(?:minute|min|hour|hr|day)s?.*$/i, "")
     .replace(/\s+daily(?:\s+at\s+.*)?$/i, "")
     .replace(/\s+every\s+day(?:\s+at\s+.*)?$/i, "")
+    .replace(/[.?!]+$/, "")
     .trim();
 
   const words = cleaned.split(/\s+/).filter(Boolean);
@@ -594,6 +635,8 @@ export function cleanReminderContent(rawText: string): string {
   let cleaned = rawText.trim();
 
   cleaned = cleaned
+    .replace(/^(?:(?:in|for|to|at)\s+(?:the\s+)?(?:team\s+)?[\w\s-]{1,30}\s*[,:]\s*(?!\d{2})|[a-zA-Z][\w\s-]{0,29}\s*:\s*(?!\d{2}))/i, "")
+    .replace(/^(?:(?:today|tomorrow)\s+)?(?:i|we)\s+(?:will|shall|have\s+to|need\s+to|must|should|gotta|got\s+to|am\s+going\s+to|'ll)\s+/i, "")
     .replace(/^(?:i\s+have\s+to|i\s+need\s+to|i\s+must)\s+/i, "")
     .replace(/^(?:please\s+)?remind\s+me\s+(?:to\s+|about\s+|that\s+)?/i, "")
     .replace(/^set\s+a\s+reminder\s+(?:for\s+|to\s+)?/i, "")
@@ -629,6 +672,14 @@ export function generateSmartListInfo(rawText: string): {
   ) {
     title = "Bathroom Supplies";
     content = "Bathroom supplies and toiletries to get.";
+  } else if (
+    lower.includes("gym") ||
+    lower.includes("workout") ||
+    lower.includes("exercise") ||
+    lower.includes("sports shoes")
+  ) {
+    title = "Gym Essentials";
+    content = "Items to pack for the gym.";
   } else if (
     lower.includes("vacation") ||
     lower.includes("pack") ||
@@ -824,26 +875,18 @@ export function parseMultipleReminders(
   // - "and also", "also" (when followed by a verb/action or "i have to/i need to")
   // - Semicolons ";" or newlines "\n"
   const splitPattern =
-    /(?:\s+(?:and\s+)?then\s+|\s+(?:and\s+)?after\s+that\s+|\s+and\s+also\s+|;\s*|\n+)/i;
+    /(?:,\s*(?:and\s+)?then\s+|\s+(?:and\s+)?then\s+|\s+(?:and\s+)?after\s+that\s+|\s+and\s+also\s+|;\s*|\n+)/i;
 
   let segments = trimmed.split(splitPattern).map((s) => s.trim()).filter(Boolean);
 
-  // If segments <= 1, check for clauses separated by ", and " or " and " when multiple times are mentioned
+  // If segments <= 1, check for clauses separated by ", and " or " and " when multiple tasks/actions are mentioned
   if (segments.length <= 1) {
-    const timeOccurrences = (
-      trimmed.match(/\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)|at\s+\d{1,2}(?::\d{2})?)\b/gi) || []
-    ).length;
+    const boundaryRegex =
+      /(?:,\s*(?:and\s+)?|\s+and\s+)(?=(?:(?:i\s+(?:will|have\s+to|need\s+to|must|should|got\s+to|gotta|am\s+going\s+to|'ll)|please\s+)?(?:call|phone|ring|pay|submit|attend|meet|send|email|buy|pick\s+up|clean|wash|take|drink|check|finish|complete|wake|visit|drop|collect|deliver|post|write|order|renew|cancel|book|schedule|remind|go|head|walk|run|exercise|workout|gym|study|read|cook|eat|sleep|start|leave|get|shop))\b)/i;
 
-    if (timeOccurrences >= 2) {
-      // Split on ", and " or " and " followed by a task verb or subject
-      const andSplit = trimmed
-        .split(/,\s*(?:and\s+)?|\s+and\s+(?=[a-z\s]+(?:at\s+\d|\d{1,2}(?::\d{2})?\s*(?:am|pm)))/i)
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      if (andSplit.length >= 2) {
-        segments = andSplit;
-      }
+    const candidateSegments = trimmed.split(boundaryRegex).map((s) => s.trim()).filter(Boolean);
+    if (candidateSegments.length >= 2) {
+      segments = candidateSegments;
     }
   }
 
@@ -858,8 +901,43 @@ export function parseMultipleReminders(
 
     // Each segment must qualify as a reminder or have a detectable scheduled time/day
     if (parsed.isReminder || parsed.dueDate || parsed.detectedTime) {
+      let finalDueDate = parsed.dueDate;
+      let finalDueDateLocal = parsed.dueDateLocal;
+
+      if (!finalDueDate && parsed.detectedTime) {
+        const offset =
+          clientTimezoneOffset !== undefined
+            ? clientTimezoneOffset
+            : typeof window !== "undefined"
+              ? new Date().getTimezoneOffset()
+              : 0;
+
+        const d = new Date(referenceDate.getTime() - offset * 60 * 1000);
+        const h = parsed.detectedTime.hours;
+        const m = parsed.detectedTime.minutes;
+
+        if (h < d.getUTCHours() || (h === d.getUTCHours() && m <= d.getUTCMinutes())) {
+          d.setUTCDate(d.getUTCDate() + 1);
+        }
+
+        finalDueDate = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), h, m) + offset * 60 * 1000;
+        finalDueDateLocal =
+          d.getUTCFullYear() +
+          "-" +
+          String(d.getUTCMonth() + 1).padStart(2, "0") +
+          "-" +
+          String(d.getUTCDate()).padStart(2, "0") +
+          "T" +
+          String(h).padStart(2, "0") +
+          ":" +
+          String(m).padStart(2, "0");
+      }
+
       parsedReminders.push({
         ...parsed,
+        isReminder: true,
+        dueDate: finalDueDate,
+        dueDateLocal: finalDueDateLocal,
         title: parsed.title || cleanReminderTitle(seg),
       });
     }
