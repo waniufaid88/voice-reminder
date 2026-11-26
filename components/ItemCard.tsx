@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "convex/react";
 import toast from "react-hot-toast";
 import {
@@ -80,6 +80,8 @@ interface ItemCardProps {
   onEdit: (item: ItemRecord) => void;
   isHighlighted?: boolean;
   onListCompleted?: (itemId: string) => void;
+  isMenuOpen?: boolean;
+  onToggleMenu?: (open: boolean) => void;
 }
 
 function formatCreatedDate(timestamp: number): string {
@@ -114,6 +116,8 @@ export function ItemCard({
   onEdit,
   isHighlighted,
   onListCompleted,
+  isMenuOpen: isMenuOpenProp,
+  onToggleMenu,
 }: ItemCardProps) {
   const togglePin = useMutation(api.items.togglePin);
   const deleteItem = useMutation(api.items.deleteItem);
@@ -183,13 +187,56 @@ export function ItemCard({
     item.audioStorageId ? { storageId: item.audioStorageId } : "skip"
   );
 
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  // Menu state: support controlled mode (from parent dashboard) or fallback to local state
+  const [localMenuOpen, setLocalMenuOpen] = useState(false);
+  const isControlled = typeof isMenuOpenProp === "boolean";
+  const isMenuOpen = isControlled ? isMenuOpenProp : localMenuOpen;
+
+  const setIsMenuOpen = (open: boolean | ((prev: boolean) => boolean)) => {
+    const nextOpen = typeof open === "function" ? open(isMenuOpen) : open;
+    if (onToggleMenu) {
+      onToggleMenu(nextOpen);
+    }
+    if (!isControlled) {
+      setLocalMenuOpen(nextOpen);
+    }
+  };
+
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isSnoozeOpen, setIsSnoozeOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTogglingReminder, setIsTogglingReminder] = useState(false);
   const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
   const [isContentExpanded, setIsContentExpanded] = useState(false);
   const [isChecklistExpanded, setIsChecklistExpanded] = useState(false);
+
+  // Close dropdown menu when clicking outside or pressing Escape (works for desktop and mobile)
+  useEffect(() => {
+    if (!isMenuOpen) return;
+
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside, { passive: true });
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isMenuOpen]);
 
   // Quick checklist item addition
   const [isAddingItem, setIsAddingItem] = useState(false);
@@ -242,6 +289,7 @@ export function ItemCard({
       } else {
         toast.success("Item deleted");
       }
+      setIsDeleteDialogOpen(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete item";
       toast.error(msg);
@@ -502,12 +550,16 @@ export function ItemCard({
             )}
 
             {/* 3-Dots Dropdown Trigger */}
-            <div className="relative">
+            <div className="relative" ref={menuRef}>
               <button
                 type="button"
-                onClick={() => setIsMenuOpen(!isMenuOpen)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsMenuOpen(!isMenuOpen);
+                }}
                 className="rounded-lg p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
                 title="More actions"
+                aria-expanded={isMenuOpen}
               >
                 <MoreVertical className="h-4 w-4" />
               </button>
@@ -535,42 +587,17 @@ export function ItemCard({
 
                   {/* Delete trigger inside dropdown */}
                   {canDelete && (
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                        >
-                          <Trash2 className="h-3.5 w-3.5 text-rose-500" />
-                          <span>{isPerUserDelete ? "Remove" : "Delete"}</span>
-                        </button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>
-                            {isPerUserDelete ? "Remove this reminder?" : "Delete this item?"}
-                          </AlertDialogTitle>
-                          <AlertDialogDescription>
-                            {isPerUserDelete
-                              ? `This will remove "${item.title}" from your view while remaining available for your teammates.`
-                              : `This will permanently delete "${item.title}". This action cannot be undone.`}
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            onClick={handleConfirmDelete}
-                            className="bg-rose-600 hover:bg-rose-700 text-white"
-                          >
-                            {isDeleting
-                              ? "Removing..."
-                              : isPerUserDelete
-                                ? "Remove for Me"
-                                : "Yes, Delete"}
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setIsDeleteDialogOpen(true);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-rose-500" />
+                      <span>{isPerUserDelete ? "Remove" : "Delete"}</span>
+                    </button>
                   )}
 
                   {!canEdit && !canDelete && (
@@ -754,8 +781,8 @@ export function ItemCard({
               <div className="h-2 w-full bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${progressPercent === 100
-                      ? "bg-gradient-to-r from-emerald-500 to-teal-500 shadow-xs shadow-emerald-500/50"
-                      : "bg-gradient-to-r from-purple-500 to-indigo-500"
+                    ? "bg-gradient-to-r from-emerald-500 to-teal-500 shadow-xs shadow-emerald-500/50"
+                    : "bg-gradient-to-r from-purple-500 to-indigo-500"
                     }`}
                   style={{ width: `${progressPercent}%` }}
                 />
@@ -933,6 +960,36 @@ export function ItemCard({
             </span>
           ))}
         </div>
+      )}
+      {/* Delete / Remove Confirmation Dialog */}
+      {canDelete && (
+        <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {isPerUserDelete ? "Remove this reminder?" : "Delete this item?"}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {isPerUserDelete
+                  ? `This will remove "${item.title}" from your view while remaining available for your teammates.`
+                  : `This will permanently delete "${item.title}". This action cannot be undone.`}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleConfirmDelete}
+                className="bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
+              >
+                {isDeleting
+                  ? "Removing..."
+                  : isPerUserDelete
+                    ? "Remove for Me"
+                    : "Yes, Delete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
       {/* Complete Reminder Dialog (for team reminders) */}
       {isTeamItem && (

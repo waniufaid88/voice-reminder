@@ -37,6 +37,9 @@ export function TabBasedReminderDashboard({
   // 1. Dashboard Design: Default selection is Upcoming
   const [activeTab, setActiveTab] = useState<"upcoming" | "overdue" | "completed">("upcoming");
 
+  // Single shared state to track the currently open reminder menu ID so only one is open at a time
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
   // Query target item details if specified (e.g. from notification click)
   const targetItem = useQuery(
     api.items.getById,
@@ -71,6 +74,11 @@ export function TabBasedReminderDashboard({
     setOverdueLimit(5);
     setCompletedLimit(5);
   }, [searchQuery, selectedTag]);
+
+  // Reset open menu when tab, search query, or tag changes
+  useEffect(() => {
+    setOpenMenuId(null);
+  }, [activeTab, searchQuery, selectedTag]);
 
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
@@ -396,6 +404,8 @@ export function TabBasedReminderDashboard({
                   currentUserId={userId}
                   onEdit={onEdit}
                   isHighlighted={highlightedId === item._id}
+                  isMenuOpen={openMenuId === item._id}
+                  onToggleMenu={(open) => setOpenMenuId(open ? item._id : null)}
                 />
               ))}
             </div>
