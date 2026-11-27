@@ -82,6 +82,9 @@ interface ItemCardProps {
   onListCompleted?: (itemId: string) => void;
   isMenuOpen?: boolean;
   onToggleMenu?: (open: boolean) => void;
+  isSelectionMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: (itemId: string) => void;
 }
 
 function formatCreatedDate(timestamp: number): string {
@@ -118,6 +121,9 @@ export function ItemCard({
   onListCompleted,
   isMenuOpen: isMenuOpenProp,
   onToggleMenu,
+  isSelectionMode = false,
+  isSelected = false,
+  onToggleSelect,
 }: ItemCardProps) {
   const togglePin = useMutation(api.items.togglePin);
   const deleteItem = useMutation(api.items.deleteItem);
@@ -164,7 +170,8 @@ export function ItemCard({
   const isTeamAdminOrOwner =
     userTeamRole === "owner" || userTeamRole === "admin";
 
-  const isPerUserDelete = isTeamItem && (isCompletedReminder || isOverdue);
+  const isPerUserDelete =
+    isTeamItem && !isCreator && !isTeamAdminOrOwner && (isCompletedReminder || isOverdue);
 
   const canEdit = !isTeamItem
     ? (!item.userId || !currentUserId || isCreator)
@@ -461,7 +468,10 @@ export function ItemCard({
   return (
     <div
       id={`item-${item._id}`}
-      className={`group relative flex flex-col justify-between rounded-2xl border transition-all duration-300 p-4 sm:p-5 shadow-xs hover:shadow-md ${isHighlighted
+      className={`group relative flex flex-col justify-between rounded-2xl border transition-all duration-300 p-4 sm:p-5 shadow-xs hover:shadow-md ${isSelected
+        ? "ring-2 ring-indigo-500 bg-indigo-50/25 dark:bg-indigo-950/20 border-indigo-500 dark:border-indigo-500 shadow-md "
+        : ""
+        }${isHighlighted
         ? "ring-4 ring-purple-500 shadow-xl shadow-purple-500/40 scale-[1.01] animate-pulse z-20"
         : ""
         } ${item.teamId ? "ring-1 ring-purple-500/25 dark:ring-purple-500/35 " : ""
@@ -481,6 +491,29 @@ export function ItemCard({
         <div className="flex items-center justify-between gap-2">
           {/* Badge */}
           <div className="flex items-center gap-1.5 flex-wrap">
+            {/* Selection Checkbox */}
+            {isSelectionMode && (
+              <div
+                className="flex items-center justify-center mr-1"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {canDelete ? (
+                  <Checkbox
+                    checked={isSelected}
+                    onCheckedChange={() => onToggleSelect?.(item._id)}
+                    className="h-4.5 w-4.5 rounded-md border-2 border-zinc-400 dark:border-zinc-500 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 cursor-pointer transition-all"
+                    aria-label={`Select ${item.title}`}
+                  />
+                ) : (
+                  <div
+                    className="flex items-center justify-center h-4.5 w-4.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 cursor-not-allowed border border-zinc-200 dark:border-zinc-700"
+                    title="You cannot delete this item"
+                  >
+                    <span className="text-[10px]">🔒</span>
+                  </div>
+                )}
+              </div>
+            )}
             {item.type === "reminder" && (
               <span className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-xs font-semibold text-amber-600 dark:text-amber-400">
                 <span>🔔</span> Reminder

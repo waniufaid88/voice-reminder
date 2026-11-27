@@ -1,11 +1,23 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
+import toast from "react-hot-toast";
+import { CheckSquare, Trash2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { ItemCard, ItemRecord } from "./ItemCard";
 import { Button } from "./ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 
 interface TabBasedReminderDashboardProps {
   userId?: Id<"users"> | null;
@@ -39,6 +51,13 @@ export function TabBasedReminderDashboard({
 
   // Single shared state to track the currently open reminder menu ID so only one is open at a time
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
+  // Multi-select batch deletion state
+  const deleteMultipleItems = useMutation(api.items.deleteMultipleItems);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isConfirmBatchDeleteOpen, setIsConfirmBatchDeleteOpen] = useState(false);
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
 
   // Query target item details if specified (e.g. from notification click)
   const targetItem = useQuery(
@@ -75,9 +94,11 @@ export function TabBasedReminderDashboard({
     setCompletedLimit(5);
   }, [searchQuery, selectedTag]);
 
-  // Reset open menu when tab, search query, or tag changes
+  // Reset open menu and selection mode when tab, search query, or tag changes
   useEffect(() => {
     setOpenMenuId(null);
+    setIsSelectionMode(false);
+    setSelectedIds(new Set());
   }, [activeTab, searchQuery, selectedTag]);
 
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -169,6 +190,7 @@ export function TabBasedReminderDashboard({
         items: ItemRecord[];
         totalCount: number;
         hasMore: boolean;
+        allSelectableIds?: string[];
       }
     >
   >({});
@@ -184,6 +206,7 @@ export function TabBasedReminderDashboard({
             items: ItemRecord[];
             totalCount: number;
             hasMore: boolean;
+            allSelectableIds?: string[];
           },
         }));
       }, 0);
@@ -229,6 +252,60 @@ export function TabBasedReminderDashboard({
   const hasMore = currentTabData?.hasMore ?? false;
   // Show loading skeleton ONLY during the initial data load of this tab
   const isLoading = currentTabData === undefined;
+
+  const allAvailableIds: string[] =
+    tabData?.allSelectableIds ||
+    cachedTabData[cacheKey]?.allSelectableIds ||
+    items.map((i) => i._id);
+
+  const isAllSelected =
+    allAvailableIds.length > 0 &&
+    allAvailableIds.every((id) => selectedIds.has(id));
+
+  const handleToggleSelect = (itemId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(allAvailableIds));
+    }
+  };
+
+  const handleConfirmBatchDelete = async () => {
+    if (selectedIds.size === 0 || isBatchDeleting) return;
+    setIsBatchDeleting(true);
+    try {
+      const countToDelete = selectedIds.size;
+      const res = await deleteMultipleItems({
+        itemIds: Array.from(selectedIds) as Id<"items">[],
+        userId: userId ? (userId as Id<"users">) : undefined,
+      });
+      const actualCount = res?.deletedCount ?? countToDelete;
+      toast.success(
+        `${actualCount} reminder${actualCount === 1 ? "" : "s"} deleted`
+      );
+      setIsConfirmBatchDeleteOpen(false);
+      setIsSelectionMode(false);
+      setSelectedIds(new Set());
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to delete selected reminders";
+      toast.error(msg);
+    } finally {
+      setIsBatchDeleting(false);
+    }
+  };
 
   return (
     <div className="space-y-4 sm:space-y-5">
@@ -325,6 +402,65 @@ export function TabBasedReminderDashboard({
         </button>
       </div>
 
+      {/* Sub-header: Sorting info and Select button */}
+      <div className="flex items-center justify-between gap-2 px-1 pt-0.5">
+        <span className="text-[11px] font-medium text-zinc-500">
+          {activeTab === "upcoming"
+            ? "Nearest upcoming first"
+            : activeTab === "overdue"
+              ? "Oldest overdue first"
+              : "Most recently completed"}
+        </span>
+
+        {items.length > 0 && (
+          <Button
+            type="button"
+            variant={isSelectionMode ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => {
+              setIsSelectionMode(!isSelectionMode);
+              setSelectedIds(new Set());
+            }}
+            className={`h-7 px-2.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${isSelectionMode
+              ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700"
+              : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+              }`}
+          >
+            <CheckSquare className="h-3.5 w-3.5 mr-1" />
+            <span>{isSelectionMode ? "Cancel" : "Select"}</span>
+          </Button>
+        )}
+      </div>
+
+      {/* Multi-Select Action Bar */}
+      {isSelectionMode && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200/90 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/80 via-white to-indigo-50/80 dark:from-indigo-950/40 dark:via-[#161726] dark:to-indigo-950/40 p-2.5 shadow-sm animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleToggleSelectAll}
+              className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200 underline cursor-pointer"
+            >
+              {isAllSelected ? "Deselect All" : `Select All (${allAvailableIds.length})`}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={selectedIds.size === 0 || isBatchDeleting}
+              onClick={() => setIsConfirmBatchDeleteOpen(true)}
+              className="h-8 px-3 text-xs font-semibold rounded-lg shadow-xs cursor-pointer bg-rose-600 hover:bg-rose-700 text-white"
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+              <span>Delete ({selectedIds.size})</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Active Tab Content Area: Only display the reminders of the active tab */}
       <div className="space-y-4">
         {isLoading ? (
@@ -406,6 +542,9 @@ export function TabBasedReminderDashboard({
                   isHighlighted={highlightedId === item._id}
                   isMenuOpen={openMenuId === item._id}
                   onToggleMenu={(open) => setOpenMenuId(open ? item._id : null)}
+                  isSelectionMode={isSelectionMode}
+                  isSelected={selectedIds.has(item._id)}
+                  onToggleSelect={handleToggleSelect}
                 />
               ))}
             </div>
@@ -464,6 +603,29 @@ export function TabBasedReminderDashboard({
           </>
         )}
       </div>
+      {/* Batch Delete Confirmation Dialog */}
+      <AlertDialog open={isConfirmBatchDeleteOpen} onOpenChange={setIsConfirmBatchDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedIds.size} selected reminder{selectedIds.size === 1 ? "" : "s"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This will delete the {selectedIds.size} selected reminder{selectedIds.size === 1 ? "" : "s"}. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isBatchDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmBatchDelete}
+              disabled={isBatchDeleting}
+              className="bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
+            >
+              {isBatchDeleting ? "Deleting..." : `Yes, Delete ${selectedIds.size}`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

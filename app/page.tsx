@@ -14,6 +14,8 @@ import {
   Pencil,
   Camera,
   Loader2,
+  CheckSquare,
+  Trash2,
 } from "lucide-react";
 
 import { api } from "@/convex/_generated/api";
@@ -227,6 +229,66 @@ export default function DashboardPage() {
   const createItem = useMutation(api.items.create);
   const generateUploadUrl = useMutation(api.items.generateUploadUrl);
   const updateProfileMutation = useMutation(api.users.updateProfile);
+  const deleteMultipleItems = useMutation(api.items.deleteMultipleItems);
+
+  // Multi-select batch deletion state for Notes, Lists, and Pinned items
+  const [selectSection, setSelectSection] = useState<"pinned" | "lists" | "notes" | null>(null);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [isConfirmBatchDeleteOpen, setIsConfirmBatchDeleteOpen] = useState(false);
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+
+  // Reset multi-select when activeTab, listSubTab, search, or tag changes
+  useEffect(() => {
+    setSelectSection(null);
+    setSelectedItemIds(new Set());
+  }, [activeTab, listSubTab, searchQuery, selectedTag]);
+
+  const handleToggleSelectId = (itemId: string) => {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectAllSection = (itemsToSelect: Array<{ _id: string }>) => {
+    const allIds = itemsToSelect.map((i) => i._id);
+    const isAll = allIds.length > 0 && allIds.every((id) => selectedItemIds.has(id));
+    if (isAll) {
+      setSelectedItemIds(new Set());
+    } else {
+      setSelectedItemIds(new Set(allIds));
+    }
+  };
+
+  const handleConfirmBatchDelete = async () => {
+    if (selectedItemIds.size === 0 || isBatchDeleting) return;
+    setIsBatchDeleting(true);
+    try {
+      const countToDelete = selectedItemIds.size;
+      const res = await deleteMultipleItems({
+        itemIds: Array.from(selectedItemIds) as Id<"items">[],
+        userId: user?._id ? (user._id as Id<"users">) : undefined,
+      });
+      const actualCount = res?.deletedCount ?? countToDelete;
+      toast.success(
+        `${actualCount} item${actualCount === 1 ? "" : "s"} deleted`
+      );
+      setIsConfirmBatchDeleteOpen(false);
+      setSelectSection(null);
+      setSelectedItemIds(new Set());
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to delete selected items";
+      toast.error(msg);
+    } finally {
+      setIsBatchDeleting(false);
+    }
+  };
 
   // Authenticate user on mount
   useEffect(() => {
@@ -883,9 +945,64 @@ export default function DashboardPage() {
             {/* Pinned Non-Reminder Items (Notes & Lists) - 5 by default with Show More / Show Less */}
             {pinnedNonReminders.length > 0 && (
               <div className="space-y-3">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
-                  📌 Pinned Items ({pinnedNonReminders.length})
-                </h2>
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                    📌 Pinned Items ({pinnedNonReminders.length})
+                  </h2>
+
+                  <Button
+                    type="button"
+                    variant={selectSection === "pinned" ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      if (selectSection === "pinned") {
+                        setSelectSection(null);
+                        setSelectedItemIds(new Set());
+                      } else {
+                        setSelectSection("pinned");
+                        setSelectedItemIds(new Set());
+                      }
+                    }}
+                    className={`h-7 px-2.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${selectSection === "pinned"
+                      ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700"
+                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                      }`}
+                  >
+                    <CheckSquare className="h-3.5 w-3.5 mr-1" />
+                    <span>{selectSection === "pinned" ? "Cancel" : "Select"}</span>
+                  </Button>
+                </div>
+
+                {selectSection === "pinned" && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200/90 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/80 via-white to-indigo-50/80 dark:from-indigo-950/40 dark:via-[#161726] dark:to-indigo-950/40 p-2.5 shadow-sm animate-in fade-in">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSelectAllSection(pinnedNonReminders)}
+                        className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200 underline cursor-pointer"
+                      >
+                        {pinnedNonReminders.every((i) => selectedItemIds.has(i._id))
+                          ? "Deselect All"
+                          : `Select All (${pinnedNonReminders.length})`}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={selectedItemIds.size === 0 || isBatchDeleting}
+                        onClick={() => setIsConfirmBatchDeleteOpen(true)}
+                        className="h-8 px-3 text-xs font-semibold rounded-lg shadow-xs cursor-pointer bg-rose-600 hover:bg-rose-700 text-white"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                        <span>Delete ({selectedItemIds.size})</span>
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {(isPinnedExpanded
                     ? pinnedNonReminders
@@ -898,6 +1015,9 @@ export default function DashboardPage() {
                       onEdit={setEditingItem}
                       isHighlighted={targetReminderId === item._id}
                       onListCompleted={handleListCompleted}
+                      isSelectionMode={selectSection === "pinned"}
+                      isSelected={selectedItemIds.has(item._id)}
+                      onToggleSelect={handleToggleSelectId}
                     />
                   ))}
                 </div>
@@ -930,13 +1050,67 @@ export default function DashboardPage() {
             {/* Lists Section: Initially display 5 lists. If > 5 lists exist, display Show More... / Show Less */}
             {regularLists.length > 0 && (activeTab === "all" || activeTab === "list") && (
               <div className="space-y-3">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1.5">
-                  <span>
-                    {activeTab === "list" && listSubTab === "completed"
-                      ? `✓ Completed Lists (${regularLists.length})`
-                      : `📋 Lists (${regularLists.length})`}
-                  </span>
-                </h2>
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1.5">
+                    <span>
+                      {activeTab === "list" && listSubTab === "completed"
+                        ? `✓ Completed Lists (${regularLists.length})`
+                        : `📋 Lists (${regularLists.length})`}
+                    </span>
+                  </h2>
+
+                  <Button
+                    type="button"
+                    variant={selectSection === "lists" ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      if (selectSection === "lists") {
+                        setSelectSection(null);
+                        setSelectedItemIds(new Set());
+                      } else {
+                        setSelectSection("lists");
+                        setSelectedItemIds(new Set());
+                      }
+                    }}
+                    className={`h-7 px-2.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${selectSection === "lists"
+                      ? "bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-300 dark:border-purple-700"
+                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                      }`}
+                  >
+                    <CheckSquare className="h-3.5 w-3.5 mr-1" />
+                    <span>{selectSection === "lists" ? "Cancel" : "Select"}</span>
+                  </Button>
+                </div>
+
+                {selectSection === "lists" && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-purple-200/90 dark:border-purple-900/60 bg-gradient-to-r from-purple-50/80 via-white to-purple-50/80 dark:from-purple-950/40 dark:via-[#161726] dark:to-purple-950/40 p-2.5 shadow-sm animate-in fade-in">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSelectAllSection(regularLists)}
+                        className="text-xs font-semibold text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-200 underline cursor-pointer"
+                      >
+                        {regularLists.every((i) => selectedItemIds.has(i._id))
+                          ? "Deselect All"
+                          : `Select All (${regularLists.length})`}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={selectedItemIds.size === 0 || isBatchDeleting}
+                        onClick={() => setIsConfirmBatchDeleteOpen(true)}
+                        className="h-8 px-3 text-xs font-semibold rounded-lg shadow-xs cursor-pointer bg-rose-600 hover:bg-rose-700 text-white"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                        <span>Delete ({selectedItemIds.size})</span>
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Display 5 lists initially, or all lists when expanded */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -951,6 +1125,9 @@ export default function DashboardPage() {
                       onEdit={setEditingItem}
                       isHighlighted={targetReminderId === item._id}
                       onListCompleted={handleListCompleted}
+                      isSelectionMode={selectSection === "lists"}
+                      isSelected={selectedItemIds.has(item._id)}
+                      onToggleSelect={handleToggleSelectId}
                     />
                   ))}
                 </div>
@@ -983,9 +1160,65 @@ export default function DashboardPage() {
             {/* Notes Section: Initially display 5 notes. If > 5 notes exist, display Show More... / Show Less */}
             {regularNotes.length > 0 && (activeTab === "all" || activeTab === "note") && (
               <div className="space-y-3">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-sky-600 dark:text-sky-400 flex items-center gap-1.5">
-                  <span>📝 Notes ({regularNotes.length})</span>
-                </h2>
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-sky-600 dark:text-sky-400 flex items-center gap-1.5">
+                    <span>📝 Notes ({regularNotes.length})</span>
+                  </h2>
+
+                  <Button
+                    type="button"
+                    variant={selectSection === "notes" ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      if (selectSection === "notes") {
+                        setSelectSection(null);
+                        setSelectedItemIds(new Set());
+                      } else {
+                        setSelectSection("notes");
+                        setSelectedItemIds(new Set());
+                      }
+                    }}
+                    className={`h-7 px-2.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${selectSection === "notes"
+                      ? "bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300 border-sky-300 dark:border-sky-700"
+                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                      }`}
+                  >
+                    <CheckSquare className="h-3.5 w-3.5 mr-1" />
+                    <span>{selectSection === "notes" ? "Cancel" : "Select"}</span>
+                  </Button>
+                </div>
+
+                {selectSection === "notes" && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-200/90 dark:border-sky-900/60 bg-gradient-to-r from-sky-50/80 via-white to-sky-50/80 dark:from-sky-950/40 dark:via-[#161726] dark:to-sky-950/40 p-2.5 shadow-sm animate-in fade-in">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSelectAllSection(regularNotes)}
+                        className="text-xs font-semibold text-sky-600 hover:text-sky-800 dark:text-sky-400 dark:hover:text-sky-200 underline cursor-pointer"
+                      >
+                        {regularNotes.every((i) => selectedItemIds.has(i._id))
+                          ? "Deselect All"
+                          : `Select All (${regularNotes.length})`}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={selectedItemIds.size === 0 || isBatchDeleting}
+                        onClick={() => setIsConfirmBatchDeleteOpen(true)}
+                        className="h-8 px-3 text-xs font-semibold rounded-lg shadow-xs cursor-pointer bg-rose-600 hover:bg-rose-700 text-white"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                        <span>Delete ({selectedItemIds.size})</span>
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Display 5 notes initially, or all notes when expanded */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {(isNotesExpanded
                     ? regularNotes
@@ -998,6 +1231,9 @@ export default function DashboardPage() {
                       onEdit={setEditingItem}
                       isHighlighted={targetReminderId === item._id}
                       onListCompleted={handleListCompleted}
+                      isSelectionMode={selectSection === "notes"}
+                      isSelected={selectedItemIds.has(item._id)}
+                      onToggleSelect={handleToggleSelectId}
                     />
                   ))}
                 </div>
@@ -1443,6 +1679,29 @@ export default function DashboardPage() {
           </div>
         </DialogContent>
       </Dialog>
+      {/* Batch Delete Confirmation Dialog for Notes, Lists, and Pinned */}
+      <AlertDialog open={isConfirmBatchDeleteOpen} onOpenChange={setIsConfirmBatchDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedItemIds.size} selected item{selectedItemIds.size === 1 ? "" : "s"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the {selectedItemIds.size} selected item{selectedItemIds.size === 1 ? "" : "s"}. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isBatchDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmBatchDelete}
+              disabled={isBatchDeleting}
+              className="bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
+            >
+              {isBatchDeleting ? "Deleting..." : `Yes, Delete ${selectedItemIds.size}`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

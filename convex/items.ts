@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -754,93 +754,139 @@ export const markNotified = mutation({
   },
 });
 
+async function deleteItemHelper(
+  ctx: MutationCtx,
+  itemId: Id<"items">,
+  userId?: Id<"users">,
+  shouldThrow = false
+): Promise<{ success: boolean; reason?: string }> {
+  const item = await ctx.db.get(itemId);
+  if (!item) return { success: false, reason: "not_found" };
+
+  // Permission enforcement:
+  // Personal reminders: only creator can delete
+  // Team reminders:
+  // - Team owner, admin, or reminder creator: permanently delete the reminder for the entire team
+  // - Regular team members: can remove overdue or completed reminders for themselves (per-member dismissal)
+  //   If all team members have removed it, auto-clean it up from the database completely.
+  if (userId) {
+    if (!item.teamId) {
+      if (item.userId !== userId) {
+        if (shouldThrow) {
+          throw new Error("Only the creator can delete this personal reminder.");
+        }
+        return { success: false, reason: "unauthorized" };
+      }
+    } else {
+      const membership = await ctx.db
+        .query("teamMembers")
+        .withIndex("by_teamId_userId", (q) =>
+          q.eq("teamId", item.teamId!).eq("userId", userId)
+        )
+        .first();
+
+      if (!membership) {
+        if (shouldThrow) {
+          throw new Error("You are not a member of this team.");
+        }
+        return { success: false, reason: "not_member" };
+      }
+
+      const isCreator = item.userId === userId;
+      const isTeamAdminOrOwner =
+        membership.role === "owner" || membership.role === "admin";
+
+      // Team owner, admin, or creator deletes permanently for the entire team
+      if (isCreator || isTeamAdminOrOwner) {
+        // Proceed to hard deletion below
+      } else {
+        // Regular member: only allowed to remove overdue or completed reminders for themselves
+        const isCompleted =
+          Boolean(item.completedByUserIds?.includes(userId)) ||
+          item.reminderStatus === "completed";
+        const isOverdue = !isCompleted && Boolean(item.dueDate && item.dueDate < Date.now());
+
+        if (!isCompleted && !isOverdue) {
+          if (shouldThrow) {
+            throw new Error("Only the reminder creator, team admin, or team owner can delete this reminder.");
+          }
+          return { success: false, reason: "unauthorized" };
+        }
+
+        const currentDeleted = item.deletedByUserIds || [];
+        const newDeleted = currentDeleted.includes(userId)
+          ? currentDeleted
+          : [...currentDeleted, userId];
+
+        // Check if all team members have dismissed this reminder
+        const allMembers = await ctx.db
+          .query("teamMembers")
+          .withIndex("by_teamId", (q) => q.eq("teamId", item.teamId!))
+          .collect();
+
+        if (allMembers.length > 0 && newDeleted.length >= allMembers.length) {
+          // All members dismissed it: auto-clean from database completely
+          if (item.scheduledJobId) {
+            try {
+              await ctx.scheduler.cancel(item.scheduledJobId);
+            } catch { }
+          }
+          if (item.audioStorageId) {
+            try {
+              await ctx.storage.delete(item.audioStorageId);
+            } catch { }
+          }
+          await ctx.db.delete(itemId);
+          return { success: true };
+        }
+
+        // Otherwise patch deletedByUserIds for per-user dismissal
+        await ctx.db.patch(itemId, {
+          deletedByUserIds: newDeleted,
+        });
+        return { success: true };
+      }
+    }
+  }
+
+  if (item.scheduledJobId) {
+    try {
+      await ctx.scheduler.cancel(item.scheduledJobId);
+    } catch { }
+  }
+  if (item.audioStorageId) {
+    try {
+      await ctx.storage.delete(item.audioStorageId);
+    } catch { }
+  }
+  await ctx.db.delete(itemId);
+  return { success: true };
+}
+
 export const deleteItem = mutation({
   args: {
     itemId: v.id("items"),
     userId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
-    const item = await ctx.db.get(args.itemId);
-    if (!item) return;
+    await deleteItemHelper(ctx, args.itemId, args.userId, true);
+  },
+});
 
-    // Permission enforcement:
-    // Personal reminders: only creator can delete
-    // Team reminders:
-    // - If completed or overdue: any team member can delete it strictly for themselves (per-user dismissal)
-    // - If upcoming: reminder creator, team admin, and team owner can delete for the team
-    if (args.userId) {
-      if (!item.teamId) {
-        if (item.userId !== args.userId) {
-          throw new Error("Only the creator can delete this personal reminder.");
-        }
-      } else {
-        const isCompleted = item.teamId
-          ? Boolean(item.completedByUserIds?.includes(args.userId)) || item.reminderStatus === "completed"
-          : item.reminderStatus === "completed";
-        const isOverdue = !isCompleted && Boolean(item.dueDate && item.dueDate < Date.now());
-
-        // Any team member can delete their own completed or overdue reminder in teams (per-member dismissal)
-        if (isCompleted || isOverdue) {
-          const membership = await ctx.db
-            .query("teamMembers")
-            .withIndex("by_teamId_userId", (q) =>
-              q.eq("teamId", item.teamId!).eq("userId", args.userId!)
-            )
-            .first();
-
-          if (!membership) {
-            throw new Error("You are not a member of this team.");
-          }
-
-          const currentDeleted = item.deletedByUserIds || [];
-          if (!currentDeleted.includes(args.userId)) {
-            await ctx.db.patch(args.itemId, {
-              deletedByUserIds: [...currentDeleted, args.userId],
-            });
-          }
-          return;
-        }
-
-        const isCreator = item.userId === args.userId;
-        let isAuthorized = isCreator;
-
-        if (!isAuthorized) {
-          const membership = await ctx.db
-            .query("teamMembers")
-            .withIndex("by_teamId_userId", (q) =>
-              q.eq("teamId", item.teamId!).eq("userId", args.userId!)
-            )
-            .first();
-
-          if (membership && (membership.role === "owner" || membership.role === "admin")) {
-            isAuthorized = true;
-          } else {
-            const team = await ctx.db.get(item.teamId!);
-            if (team && team.createdById === args.userId) {
-              isAuthorized = true;
-            }
-          }
-        }
-
-        if (!isAuthorized) {
-          throw new Error("Only the reminder creator, team admin, or team owner can delete this reminder.");
-        }
+export const deleteMultipleItems = mutation({
+  args: {
+    itemIds: v.array(v.id("items")),
+    userId: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    let deletedCount = 0;
+    for (const itemId of args.itemIds) {
+      const res = await deleteItemHelper(ctx, itemId, args.userId, false);
+      if (res.success) {
+        deletedCount++;
       }
     }
-
-    if (item.scheduledJobId) {
-      try {
-        await ctx.scheduler.cancel(item.scheduledJobId);
-      } catch { }
-    }
-    if (item.audioStorageId) {
-      try {
-        await ctx.storage.delete(item.audioStorageId);
-      } catch {
-        // Storage file deletion fallback
-      }
-    }
-    await ctx.db.delete(args.itemId);
+    return { deletedCount };
   },
 });
 
@@ -1052,6 +1098,7 @@ export const getRemindersByTab = query({
     }
 
     const totalCount = filtered.length;
+    const allSelectableIds = filtered.map((r) => r._id);
     const items = filtered.slice(0, args.limit).map((r) => {
       if (r.teamId) {
         return {
@@ -1068,6 +1115,7 @@ export const getRemindersByTab = query({
       items,
       totalCount,
       hasMore,
+      allSelectableIds,
     };
   },
 });

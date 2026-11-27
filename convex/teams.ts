@@ -138,7 +138,7 @@ export const getMyTeams = query({
           .withIndex("by_teamId", (q) => q.eq("teamId", m.teamId))
           .collect();
 
-        // Count active team reminders
+        // Count active team reminders (Upcoming only for the current user, excluding deleted and completed)
         const teamReminders = await ctx.db
           .query("items")
           .withIndex("by_teamId_type", (q) =>
@@ -146,16 +146,25 @@ export const getMyTeams = query({
           )
           .collect();
 
-        const pendingReminders = teamReminders.filter(
-          (r) => r.reminderStatus === "pending"
+        const now = Date.now();
+        const userVisibleReminders = teamReminders.filter(
+          (r) => !r.deletedByUserIds?.includes(args.userId)
         );
+
+        const activeUpcomingReminders = userVisibleReminders.filter((r) => {
+          const isCompleted =
+            Boolean(r.completedByUserIds?.includes(args.userId)) ||
+            r.reminderStatus === "completed";
+          if (isCompleted) return false;
+          return r.dueDate !== undefined && r.dueDate > now;
+        });
 
         return {
           ...team,
           userRole: m.role,
           memberCount: allMembers.length,
-          reminderCount: pendingReminders.length,
-          totalReminders: teamReminders.length,
+          reminderCount: activeUpcomingReminders.length,
+          totalReminders: userVisibleReminders.length,
         };
       })
     );
