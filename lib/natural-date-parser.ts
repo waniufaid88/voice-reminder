@@ -666,6 +666,14 @@ export function generateSmartListInfo(rawText: string): {
   let content = "Checklist of items.";
 
   if (
+    lower.includes("first-aid") ||
+    lower.includes("first aid") ||
+    lower.includes("emergency kit") ||
+    lower.includes("medical")
+  ) {
+    title = "First-Aid Kit";
+    content = "First-aid kit essentials and medical supplies.";
+  } else if (
     lower.includes("bathroom") ||
     lower.includes("toilet") ||
     lower.includes("toiletries")

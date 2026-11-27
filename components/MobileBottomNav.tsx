@@ -24,31 +24,25 @@ export function MobileBottomNav({
         type="button"
         onClick={() => onTabChange("all")}
         className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors ${activeTab === "all"
-            ? "text-purple-600 dark:text-purple-400 font-semibold"
-            : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+          ? "text-purple-600 dark:text-purple-400 font-semibold"
+          : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
           }`}
       >
         <Home className="h-5 w-5" />
         <span className="text-[10px] mt-0.5">Home</span>
       </button>
 
-      {/* Teams - Prominently Highlighted */}
+      {/* Reminders */}
       <button
         type="button"
-        onClick={() => onTabChange("teams")}
-        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors relative ${
-          activeTab === "teams"
-            ? "text-purple-600 dark:text-purple-400 font-bold"
-            : "text-zinc-500 hover:text-purple-600 dark:text-zinc-400 dark:hover:text-purple-300"
-        }`}
+        onClick={() => onTabChange("reminder")}
+        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors ${activeTab === "reminder"
+          ? "text-purple-600 dark:text-purple-400 font-semibold"
+          : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+          }`}
       >
-        <div className="relative">
-          <Users className={`h-5 w-5 ${activeTab === "teams" ? "stroke-[2.5]" : ""}`} />
-          {activeTab === "teams" && (
-            <span className="absolute -top-1 -right-1 flex h-2 w-2 rounded-full bg-purple-600 animate-pulse" />
-          )}
-        </div>
-        <span className="text-[10px] mt-0.5">Teams</span>
+        <Bell className="h-5 w-5" />
+        <span className="text-[10px] mt-0.5">Reminders</span>
       </button>
 
       {/* Center Floating Mic Button */}
@@ -61,17 +55,22 @@ export function MobileBottomNav({
         <Mic className="h-6 w-6" />
       </button>
 
-      {/* Reminders */}
+      {/* Teams - Prominently Highlighted */}
       <button
         type="button"
-        onClick={() => onTabChange("reminder")}
-        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors ${activeTab === "reminder"
-            ? "text-purple-600 dark:text-purple-400 font-semibold"
-            : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+        onClick={() => onTabChange("teams")}
+        className={`flex flex-col items-center justify-center min-w-[56px] py-1 cursor-pointer transition-colors relative ${activeTab === "teams"
+          ? "text-purple-600 dark:text-purple-400 font-bold"
+          : "text-zinc-500 hover:text-purple-600 dark:text-zinc-400 dark:hover:text-purple-300"
           }`}
       >
-        <Bell className="h-5 w-5" />
-        <span className="text-[10px] mt-0.5">Reminders</span>
+        <div className="relative">
+          <Users className={`h-5 w-5 ${activeTab === "teams" ? "stroke-[2.5]" : ""}`} />
+          {activeTab === "teams" && (
+            <span className="absolute -top-1 -right-1 flex h-2 w-2 rounded-full bg-purple-600 animate-pulse" />
+          )}
+        </div>
+        <span className="text-[10px] mt-0.5">Teams</span>
       </button>
 
       {/* More / Settings */}

@@ -176,9 +176,9 @@ export function cleanChecklistItem(rawText: string): string {
     .trim();
 
   // Remove container / bag packing frames before checking actionable task:
-  // e.g. "Prepare my gym bag with a towel" -> "a towel"
+  // e.g. "Prepare my gym bag with a towel" -> "a towel", "Prepare a first-aid kit with..." -> "bandages"
   text = text.replace(
-    /^(?:please\s+)?(?:prepare|pack|fill|load|stock|organize|set\s+up)\s+(?:(?:my|the|a|an)\s+)?(?:[\w\s]+?\s+)?(?:bag|backpack|gym\s+bag|suitcase|luggage|box|lunchbox|kit|desk|basket|cart|car)\s+with\s+/i,
+    /^(?:please\s+)?(?:(?:prepare|pack|fill|load|stock|organize|set\s+up|make|create)\s+)?(?:(?:my|the|a|an)\s+)?(?:[\w\s-]+?\s+)?(?:bag|backpack|gym\s+bag|suitcase|luggage|box|lunchbox|kit|desk|basket|cart|car|set)\s+with\s+/i,
     ""
   );
 
@@ -360,9 +360,9 @@ export function splitChecklistItems(rawText: string): string[] {
     sentence = sentence.replace(purposeClausePattern, "");
 
     // Strip container / bag / kit packing instructions:
-    // e.g. "Prepare my gym bag with a towel..." -> "a towel..."
+    // e.g. "Prepare my gym bag with a towel..." -> "a towel...", "Prepare a first-aid kit with..." -> "bandages..."
     const containerPackPattern =
-      /^(?:please\s+)?(?:prepare|pack|fill|load|stock|organize|set\s+up)\s+(?:(?:my|the|a|an)\s+)?(?:[\w\s]+?\s+)?(?:bag|backpack|gym\s+bag|suitcase|luggage|box|lunchbox|kit|desk|basket|cart|car)\s+with\s+/i;
+      /^(?:please\s+)?(?:(?:prepare|pack|fill|load|stock|organize|set\s+up|make|create)\s+)?(?:(?:my|the|a|an)\s+)?(?:[\w\s-]+?\s+)?(?:bag|backpack|gym\s+bag|suitcase|luggage|box|lunchbox|kit|desk|basket|cart|car|set)\s+with\s+/i;
     sentence = sentence.replace(containerPackPattern, "");
 
     // Strip leading existing inventory / already-have clauses at beginning of sentence:

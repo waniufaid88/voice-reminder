@@ -48,11 +48,14 @@ function isExplicitListRequest(text: string): boolean {
   const normalized = text.toLowerCase().trim();
 
   const explicitListPatterns = [
-    /\b(?:make|create|prepare|write|show)\s+(?:me\s+)?(?:a\s+)?(?:shopping\s+|grocery\s+|to[- ]?do\s+)?list\b/i,
-    /\b(?:shopping|grocery|check|to[- ]?do)\s+list\b/i,
+    /\b(?:make|create|prepare|write|show|pack|assemble|build)\s+(?:me\s+)?(?:a\s+)?(?:shopping\s+|grocery\s+|to[- ]?do\s+|packing\s+|travel\s+|camping\s+|emergency\s+)?(?:list|checklist|kit|pack|bag|box)\b/i,
+    /\b(?:shopping|grocery|check|to[- ]?do|packing)\s+list\b/i,
     /\bchecklist\b/i,
     /\badd\s+.+\s+to\s+(?:my|the)\s+list\b/i,
     /\bput\s+.+\s+on\s+(?:my|the)\s+list\b/i,
+    /\b(?:first[- ]?aid|emergency|travel|camping|baby|car|cleaning|repair)\s+(?:kit|pack|bag|essentials|supplies)\b/i,
+    /\b(?:kit|pack|bag|box|set)\s+with\s+.+?(?:,|\band\b)/i,
+    /\b(?:supplies|essentials|ingredients)\s*:/i,
   ];
 
   if (explicitListPatterns.some((pattern) => pattern.test(normalized))) {
@@ -64,7 +67,7 @@ function isExplicitListRequest(text: string): boolean {
   // "I have to purchase milk and eggs."
   // "I want to get a new keyboard."
   const buyingIntentPattern =
-    /\b(?:need|have|want|would like|should|must)\s+to\s+(?:buy|purchase|get|pick up)\b/i;
+    /\b(?:need|have|want|would like|should|must)\s+to\s+(?:buy|purchase|get|pick up|pack|prepare)\b/i;
 
   if (buyingIntentPattern.test(normalized)) {
     return true;
@@ -75,9 +78,17 @@ function isExplicitListRequest(text: string): boolean {
   // "Purchase a laptop."
   // "Pick up bread and butter."
   const directBuyingPattern =
-    /^\s*(?:please\s+)?(?:buy|purchase|pick up|get)\s+.+/i;
+    /^\s*(?:please\s+)?(?:buy|purchase|pick up|get|pack)\s+.+/i;
 
   if (directBuyingPattern.test(normalized)) {
+    return true;
+  }
+
+  // Multi-item comma enumeration without verbs, e.g. "a first-aid kit with bandages, cotton, antiseptic cream..."
+  if (
+    normalized.includes(",") &&
+    /\b(?:kit|pack|supplies|essentials|items|ingredients)\b/i.test(normalized)
+  ) {
     return true;
   }
 
@@ -319,46 +330,64 @@ export function SmartCaptureBar({ onSaveItem, userId }: SmartCaptureBarProps) {
       };
     }
 
-    if (
-      data.type === "reminder" ||
-      data.type === "list" ||
-      !isExplicitListRequest(text)
-    ) {
-      // Notes and lists MUST remain personal
-      if (data.type === "note" || data.type === "list") {
+    // If the API classified it as a list OR returned checklist items, preserve as a list!
+    if (data.type === "list" || (Array.isArray(data.checklist) && data.checklist.length > 0)) {
+      return {
+        ...data,
+        type: "list",
+        teamId: undefined,
+        teamName: undefined,
+        isTeamAmbiguous: false,
+        ambiguousTeams: undefined,
+        ...(audioData || {}),
+        tags: audioData
+          ? ["#list", "#voice"]
+          : data.tags?.length
+            ? data.tags
+            : ["#list"],
+      };
+    }
+
+    // If the API returned a note, but text has explicit list/kit intent, upgrade to list
+    if (data.type === "note" && isExplicitListRequest(text)) {
+      const listInfo = generateSmartListInfo(text);
+      if (listInfo.checklist && listInfo.checklist.length > 0) {
         return {
           ...data,
+          type: "list",
+          title: listInfo.title,
+          content: listInfo.content,
+          checklist: listInfo.checklist,
           teamId: undefined,
           teamName: undefined,
           isTeamAmbiguous: false,
           ambiguousTeams: undefined,
           ...(audioData || {}),
+          tags: audioData
+            ? ["#list", "#voice"]
+            : data.tags?.length
+              ? data.tags
+              : ["#list"],
         };
       }
+    }
+
+    // Notes MUST remain personal
+    if (data.type === "note") {
       return {
         ...data,
+        teamId: undefined,
+        teamName: undefined,
+        isTeamAmbiguous: false,
+        ambiguousTeams: undefined,
         ...(audioData || {}),
       };
     }
 
-    const listInfo = generateSmartListInfo(text);
-
+    // Reminders
     return {
       ...data,
-      type: "list",
-      title: listInfo.title,
-      content: listInfo.content,
-      checklist: listInfo.checklist,
-      teamId: undefined,
-      teamName: undefined,
-      isTeamAmbiguous: false,
-      ambiguousTeams: undefined,
       ...(audioData || {}),
-      tags: audioData
-        ? ["#list", "#voice"]
-        : data.tags?.length
-          ? data.tags
-          : ["#list"],
     };
   };
 
